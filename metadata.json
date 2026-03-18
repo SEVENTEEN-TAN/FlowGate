@@ -1,0 +1,5 @@
+{
+  "name": "Card Key Distribution System",
+  "description": "A lightweight card key distribution and verification system with an admin dashboard.",
+  "requestFramePermissions": []
+}
