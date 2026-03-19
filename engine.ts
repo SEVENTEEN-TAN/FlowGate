@@ -137,11 +137,18 @@ function findTriggerOutput(context: ExecutionContext, nodes: WorkflowNode[]): an
  * 获取当前节点的上一个节点的输出
  */
 function findPrevOutput(nodeId: string, edges: WorkflowEdge[], context: ExecutionContext): any {
-  const incomingEdge = edges.find(e => e.target === nodeId);
-  if (incomingEdge && context[incomingEdge.source]) {
-    return context[incomingEdge.source].output || {};
+  const incomingEdges = edges.filter(e => e.target === nodeId);
+  if (incomingEdges.length === 0) return {};
+  if (incomingEdges.length === 1) {
+    const src = incomingEdges[0].source;
+    return context[src]?.output ?? {};
   }
-  return {};
+  const result: Record<string, any> = {};
+  for (const edge of incomingEdges) {
+    const src = edge.source;
+    result[src] = context[src]?.output ?? {};
+  }
+  return result;
 }
 
 async function executeJsScript(

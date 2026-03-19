@@ -2,12 +2,14 @@ import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ReactFlow,
+  ReactFlowProvider,
   Background,
   Controls,
   MiniMap,
   addEdge,
   useNodesState,
   useEdgesState,
+  useReactFlow,
   Handle,
   Position,
   type Node,
@@ -897,7 +899,7 @@ function AiChatPanel({
 let nodeIdCounter = 0;
 const getNextNodeId = () => `node_${++nodeIdCounter}`;
 
-export default function WorkflowEditor() {
+function WorkflowEditorInner() {
   const { appId, workflowId } = useParams();
   const navigate = useNavigate();
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -909,6 +911,7 @@ export default function WorkflowEditor() {
   const [saveMsg, setSaveMsg] = useState('');
   const [savedId, setSavedId] = useState<string | null>(null);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  const reactFlow = useReactFlow();
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
 
   // AI Assistant states
@@ -1055,16 +1058,23 @@ export default function WorkflowEditor() {
     setSelectedNode(null);
   }, [setNodes, setEdges]);
 
-  // Add node from palette
+  // Add node from palette — place at viewport center
   const addNode = useCallback((paletteItem: typeof NODE_PALETTE[0]) => {
+    const center = reactFlow.screenToFlowPosition({
+      x: window.innerWidth / 2,
+      y: (window.innerHeight - 200) / 2,
+    });
     const newNode: Node = {
       id: getNextNodeId(),
       type: paletteItem.type,
-      position: { x: 250 + Math.random() * 100, y: 150 + Math.random() * 200 },
+      position: {
+        x: center.x + (Math.random() - 0.5) * 60,
+        y: center.y + (Math.random() - 0.5) * 60,
+      },
       data: { label: paletteItem.label, ...paletteItem.defaults },
     };
     setNodes(nds => [...nds, newNode]);
-  }, [setNodes]);
+  }, [setNodes, reactFlow]);
 
   // Save workflow
   const handleSave = async () => {
@@ -1330,5 +1340,13 @@ export default function WorkflowEditor() {
         </button>
       )}
     </div>
+  );
+}
+
+export default function WorkflowEditor() {
+  return (
+    <ReactFlowProvider>
+      <WorkflowEditorInner />
+    </ReactFlowProvider>
   );
 }
