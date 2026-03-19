@@ -56,32 +56,50 @@ type LogCallback = (msg: string) => void;
 function interpolate(template: string, context: ExecutionContext, extras?: { input?: any; prev?: any }): string {
   let result = template;
 
-  // Replace {{input.field}}
-  if (extras?.input) {
-    result = result.replace(/\{\{input\.(\w+)\}\}/g, (match, field) => {
-      const val = extras.input[field];
-      if (val !== undefined) return typeof val === 'object' ? JSON.stringify(val) : String(val);
-      return match;
-    });
-  }
-
-  // Replace {{prev.field}}
-  if (extras?.prev) {
-    result = result.replace(/\{\{prev\.(\w+)\}\}/g, (match, field) => {
-      const val = extras.prev[field];
-      if (val !== undefined) return typeof val === 'object' ? JSON.stringify(val) : String(val);
-      return match;
-    });
-  }
-
-  // Replace {{nodeId.output.field}}
-  result = result.replace(/\{\{(\w+)\.output\.(\w+)\}\}/g, (match, nodeId, field) => {
-    const nodeCtx = context[nodeId];
-    if (nodeCtx && nodeCtx.output && nodeCtx.output[field] !== undefined) {
-      const val = nodeCtx.output[field];
-      return typeof val === 'object' ? JSON.stringify(val) : String(val);
+  const readByPath = (obj: any, path: string): any => {
+    if (!path) return undefined;
+    let p = path.trim();
+    if (p.startsWith('.')) p = p.slice(1);
+    const tokens: (string | number)[] = [];
+    const re = /[^.[\]]+|\[(\d+)\]/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(p))) {
+      if (m[1] !== undefined) tokens.push(Number(m[1]));
+      else tokens.push(m[0]);
     }
-    return match;
+    let cur = obj;
+    for (const t of tokens) {
+      if (cur == null) return undefined;
+      cur = (cur as any)[t as any];
+    }
+    return cur;
+  };
+
+  const format = (val: any, fallback: string) => {
+    if (val === undefined) return fallback;
+    if (typeof val === 'object') return JSON.stringify(val);
+    return String(val);
+  };
+
+  if (extras?.input) {
+    result = result.replace(/\{\{input\.([^}]+)\}\}/g, (match, path) => {
+      const val = readByPath(extras.input, path);
+      return format(val, match);
+    });
+  }
+
+  if (extras?.prev) {
+    result = result.replace(/\{\{prev\.([^}]+)\}\}/g, (match, path) => {
+      const val = readByPath(extras.prev, path);
+      return format(val, match);
+    });
+  }
+
+  result = result.replace(/\{\{(\w+)\.output\.([^}]+)\}\}/g, (match, nodeId, path) => {
+    const nodeCtx = context[nodeId];
+    if (!nodeCtx) return match;
+    const val = readByPath(nodeCtx.output, path);
+    return format(val, match);
   });
 
   return result;
@@ -260,6 +278,9 @@ async function executeHttpRequest(
   } catch {}
 
   const body = method !== 'GET' ? interpolate(node.data.body || '', context, extras) : undefined;
+  const parseMode = (node.data.responseParseMode || 'auto') as 'auto' | 'json' | 'text';
+  const extractPath = (node.data.extractPath || '').toString().trim();
+  const outputMode = (node.data.outputMode || 'full') as 'full' | 'extracted';
 
   log(`[HTTP] ${method} ${url}`);
 
@@ -273,15 +294,72 @@ async function executeHttpRequest(
     const response = await fetch(url, fetchOptions);
     const text = await response.text();
     
-    let responseData: any;
+    const responseHeaders: Record<string, string> = {};
     try {
-      responseData = JSON.parse(text);
-    } catch {
-      responseData = { body: text };
+      response.headers.forEach((value, key) => {
+        responseHeaders[key] = value;
+      });
+    } catch {}
+
+    let data: any = null;
+    if (parseMode === 'text') {
+      data = text;
+    } else if (parseMode === 'json') {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = null;
+      }
+    } else {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = text;
+      }
     }
 
+    const readByPath = (obj: any, path: string): any => {
+      if (!path) return undefined;
+      let p = path.trim();
+      if (p.startsWith('.')) p = p.slice(1);
+      const tokens: (string | number)[] = [];
+      const re = /[^.[\]]+|\[(\d+)\]/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(p))) {
+        if (m[1] !== undefined) tokens.push(Number(m[1]));
+        else tokens.push(m[0]);
+      }
+      let cur = obj;
+      for (const t of tokens) {
+        if (cur == null) return undefined;
+        cur = (cur as any)[t as any];
+      }
+      return cur;
+    };
+
+    const baseOutput = {
+      status: response.status,
+      ok: response.ok,
+      headers: responseHeaders,
+      data,
+      text,
+    };
+
+    const extracted = extractPath ? readByPath(baseOutput, extractPath) : undefined;
+
     log(`[HTTP] 响应状态: ${response.status}`);
-    return { status: response.status, data: responseData };
+    if (extractPath) {
+      log(`[HTTP] 提取路径: ${extractPath} => ${extracted === undefined ? 'undefined' : typeof extracted === 'object' ? JSON.stringify(extracted) : String(extracted)}`);
+    }
+
+    if (outputMode === 'extracted') {
+      return { status: response.status, ok: response.ok, extracted };
+    }
+
+    return {
+      ...baseOutput,
+      extracted,
+    };
   } catch (err: any) {
     log(`[HTTP] 请求失败: ${err.message}`);
     throw err;

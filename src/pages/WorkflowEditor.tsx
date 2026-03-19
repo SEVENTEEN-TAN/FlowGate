@@ -192,7 +192,7 @@ const NODE_PALETTE = [
   { type: 'trigger', label: '触发器', icon: Zap, color: 'indigo', description: '流程入口' },
   { type: 'script', label: 'JS 脚本', icon: Code, color: 'amber', description: '执行 JavaScript', defaults: { scriptType: 'javascript', code: '// 在这里编写代码\nreturn { result: "hello" };' } },
   { type: 'script', label: 'Python 脚本', icon: Code, color: 'amber', description: '执行 Python', defaults: { scriptType: 'python', code: '# 在这里编写代码\nimport json\nprint(json.dumps({"result": "hello"}))' } },
-  { type: 'http', label: 'HTTP 请求', icon: Globe, color: 'emerald', description: '发送 API 请求', defaults: { method: 'GET', url: '', headers: '{}', body: '' } },
+  { type: 'http', label: 'HTTP 请求', icon: Globe, color: 'emerald', description: '发送 API 请求', defaults: { method: 'GET', url: '', headers: '{}', body: '', responseParseMode: 'auto', extractPath: '', outputMode: 'full' } },
   { type: 'condition', label: '条件分支', icon: GitBranch, color: 'purple', description: 'If/Else 判断', defaults: { expression: '' } },
   { type: 'delay', label: '延时等待', icon: Clock, color: 'sky', description: '暂停 N 秒', defaults: { seconds: 5 } },
   { type: 'log', label: '日志输出', icon: MessageSquare, color: 'rose', description: '输出信息给用户', defaults: { message: '' } },
@@ -224,9 +224,11 @@ const NODE_HELP: Record<string, { title: string; sections: { label: string; cont
   http: {
     title: 'HTTP 请求节点',
     sections: [
-      { label: '输出', content: '{ status: 200, data: { ... } }' },
-      { label: '模板变量', content: 'URL/Headers/Body 中可用:\n{{input.field}} — 用户输入\n{{prev.field}} — 上一节点\n{{nodeId.output.field}} — 指定节点' },
-      { label: '示例', content: 'URL: https://api.example.com/user/{{input.username}}\nBody: {"email": "{{input.email}}"}' },
+      { label: '输出', content: '{ status: 200, ok: true, data: ..., extracted: ... }' },
+      { label: '解析模式', content: '自动 — 优先按 JSON 解析，否则按文本\nJSON — 强制按 JSON 解析（失败则 data=null）\n文本 — 直接输出字符串' },
+      { label: '提取字段', content: '支持提取路径，例如:\n- data.token\n- result.user.id\n- items[0].id\n提取结果输出在 extracted 字段' },
+      { label: '模板变量', content: 'URL/Headers/Body 中可用:\n{{input.xxx}} — 用户输入(支持多级)\n{{prev.xxx}} — 上一节点(支持多级)\n{{nodeId.output.xxx}} — 指定节点输出(支持多级)\n例如: {{prev.data.token}} / {{node_2.output.extracted}}' },
+      { label: '示例', content: 'URL: https://api.example.com/user/{{input.username}}\nBody: {"email": "{{input.email}}"}\n提取路径: data.token' },
     ]
   },
   condition: {
@@ -423,6 +425,43 @@ function PropertiesPanel({ node, onChange, onDelete }: { node: Node | null; onCh
               className="w-full px-3 py-1.5 text-sm font-mono border border-zinc-200 rounded-lg resize-none bg-zinc-50"
               placeholder="请求体内容 (支持模板变量)"
             />
+          </div>
+          <div className="h-px bg-zinc-100" />
+          <div>
+            <label className="block text-xs font-medium text-zinc-500 mb-1">响应解析</label>
+            <select
+              value={(node.data.responseParseMode as string) || 'auto'}
+              onChange={e => updateData('responseParseMode', e.target.value)}
+              className="w-full px-3 py-1.5 text-sm border border-zinc-200 rounded-lg bg-white"
+            >
+              <option value="auto">自动</option>
+              <option value="json">JSON</option>
+              <option value="text">文本</option>
+            </select>
+            <p className="text-[11px] text-zinc-400 mt-1">自动：优先按 JSON 解析；失败则按文本</p>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-zinc-500 mb-1">提取字段 (可选)</label>
+            <input
+              type="text"
+              value={(node.data.extractPath as string) || ''}
+              onChange={e => updateData('extractPath', e.target.value)}
+              placeholder="例: data.token / items[0].id"
+              className="w-full px-3 py-1.5 text-sm font-mono border border-zinc-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+            />
+            <p className="text-[11px] text-zinc-400 mt-1">提取结果会写入输出的 extracted 字段</p>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-zinc-500 mb-1">输出模式</label>
+            <select
+              value={(node.data.outputMode as string) || 'full'}
+              onChange={e => updateData('outputMode', e.target.value)}
+              className="w-full px-3 py-1.5 text-sm border border-zinc-200 rounded-lg bg-white"
+            >
+              <option value="full">全量输出</option>
+              <option value="extracted">仅输出 extracted</option>
+            </select>
+            <p className="text-[11px] text-zinc-400 mt-1">仅输出时：节点输出为 {'{ status, ok, extracted }'}</p>
           </div>
         </>
       )}
@@ -675,13 +714,13 @@ function AiChatPanel({
               <p className="text-xs text-zinc-500 max-w-[200px] mx-auto leading-relaxed">我可以帮您编写处理脚本、配置HTTP请求或解释现有节点结构。</p>
 
               <div className="mt-8 flex flex-col gap-2.5 px-2">
-                <button onClick={() => onSendMessage()} className="text-xs text-left p-3 rounded-xl border border-zinc-200 bg-white hover:border-indigo-300 hover:bg-indigo-50 hover:shadow-sm text-zinc-600 transition-all font-medium">
+                <button onClick={() => setAiInput('帮我写一个JS脚本，从 input 中提取 username 并返回')} className="text-xs text-left p-3 rounded-xl border border-zinc-200 bg-white hover:border-indigo-300 hover:bg-indigo-50 hover:shadow-sm text-zinc-600 transition-all font-medium">
                   "帮我写一个简单的 JS 处理脚本"
                 </button>
-                <button onClick={() => onSendMessage()} className="text-xs text-left p-3 rounded-xl border border-zinc-200 bg-white hover:border-indigo-300 hover:bg-indigo-50 hover:shadow-sm text-zinc-600 transition-all font-medium">
+                <button onClick={() => setAiInput('帮我配置一个发起 POST 请求的 HTTP 节点参数')} className="text-xs text-left p-3 rounded-xl border border-zinc-200 bg-white hover:border-indigo-300 hover:bg-indigo-50 hover:shadow-sm text-zinc-600 transition-all font-medium">
                   "帮我配置一个 HTTP 节点"
                 </button>
-                <button onClick={() => onSendMessage()} className="text-xs text-left p-3 rounded-xl border border-zinc-200 bg-white hover:border-indigo-300 hover:bg-indigo-50 hover:shadow-sm text-zinc-600 transition-all font-medium">
+                <button onClick={() => setAiInput('解释一下我现在选中的这个节点的作用')} className="text-xs text-left p-3 rounded-xl border border-zinc-200 bg-white hover:border-indigo-300 hover:bg-indigo-50 hover:shadow-sm text-zinc-600 transition-all font-medium">
                   "解释一下我现在选中的节点"
                 </button>
               </div>
