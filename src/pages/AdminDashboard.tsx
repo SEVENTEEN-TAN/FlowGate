@@ -1476,10 +1476,15 @@ function ManageApps() {
                 <div className="flex gap-1">
                   <Link
                     to={`/admin/apps/${app.id}/design`}
-                    className="p-2 text-zinc-400 hover:text-violet-600 hover:bg-violet-50 rounded-lg transition-colors"
+                    className="p-2 text-zinc-400 hover:text-violet-600 hover:bg-violet-50 rounded-lg transition-colors relative"
                     title="设计页面"
                   >
                     <Palette className="w-4 h-4" />
+                    {(!!app.ui_schema && app.ui_schema !== '[]' && app.ui_schema !== 'null') && (
+                      <span className="absolute -top-1 -right-2 px-1 bg-emerald-500 text-white text-[10px] rounded-full flex items-center justify-center whitespace-nowrap">
+                        已配置
+                      </span>
+                    )}
                   </Link>
                   <button
                     onClick={() => {
