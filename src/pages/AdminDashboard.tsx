@@ -1051,6 +1051,34 @@ function AdminSettings() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
+  // AI config states
+  const [aiUrl, setAiUrl] = useState('');
+  const [aiKey, setAiKey] = useState('');
+  const [aiModel, setAiModel] = useState('');
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [loadingAi, setLoadingAi] = useState(true);
+  const [aiSaveMsg, setAiSaveMsg] = useState('');
+  const [aiTestMsg, setAiTestMsg] = useState('');
+  const [testingAi, setTestingAi] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/admin/settings', {
+      headers: { Authorization: `Bearer ${localStorage.getItem('adminToken')}` }
+    })
+      .then(res => res.json())
+      .then(data => {
+        setAiUrl(data.ai_api_url || 'https://api.openai.com');
+        setAiKey(data.ai_api_key || '');
+        setAiModel(data.ai_model_id || 'gpt-4o-mini');
+        setAiPrompt(data.ai_system_prompt || '你是 FlowGate 工作流平台的 AI 助手。你帮助用户在可视化流程编辑器中构建自动化工作流。\n\n## 系统架构\nFlowGate 是一个基于卡密验证的自动化流程执行平台。用户通过卡密登录后，执行绑定的工作流。\n\n## 可用节点类型\n1. **触发器** — 流程入口，接收用户前端表单输入，输出为 input 对象\n2. **JS 脚本** — 在 Node.js 沙箱中执行 JavaScript\n   - 可用变量: input（用户输入）, prev（上一节点输出）, context.nodeId（指定节点输出）\n   - 使用 console.log() 输出日志\n   - return 的值成为此节点的输出\n3. **Python 脚本** — 执行 Python 脚本\n   - 环境变量: USER_INPUT, PREV_OUTPUT, INPUT_DATA（JSON 格式）\n   - 最后一行 print 的 JSON 成为节点输出\n4. **HTTP 请求** — 发送 HTTP 请求（GET/POST/PUT/DELETE）\n   - 输出: { status: 200, data: {...} }\n5. **条件分支** — If/Else 判断，True 走左侧，False 走右侧\n6. **延时等待** — 暂停执行指定秒数\n7. **日志输出** — 输出消息到用户日志面板\n8. **卡密库** — 从卡密库获取一条未使用的卡密\n   - 输出: { key, key_id, pool_id, pool_name }\n9. **成功结束 / 失败结束** — 标记流程执行结果\n\n## 模板变量语法\n在 HTTP、日志、脚本节点中可使用:\n- {{input.字段名}} — 用户表单输入\n- {{prev.字段名}} — 上一节点输出\n- {{nodeId.output.字段名}} — 指定节点的输出\n\n## 你的职责\n- 帮助用户生成 JS/Python 脚本代码\n- 帮助配置 HTTP 请求（URL、Headers、Body）\n- 解释和优化已有代码\n- 建议工作流设计方案\n- 用中文回答，代码注释也用中文');
+        setLoadingAi(false);
+      })
+      .catch(err => {
+        console.error('Failed to load settings', err);
+        setLoadingAi(false);
+      });
+  }, []);
+
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage('');
@@ -1078,10 +1106,166 @@ function AdminSettings() {
     }
   };
 
+  const handleSaveAiSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAiSaveMsg('');
+    const settingsToSave: any = {
+      ai_api_url: aiUrl,
+      ai_model_id: aiModel,
+      ai_system_prompt: aiPrompt,
+    };
+    if (aiKey && !aiKey.includes('****')) {
+      settingsToSave.ai_api_key = aiKey;
+    }
+    
+    try {
+      const res = await fetch('/api/admin/settings', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('adminToken')}`
+        },
+        body: JSON.stringify({ settings: settingsToSave })
+      });
+      if (res.ok) {
+        setAiSaveMsg('设置保存成功');
+        setTimeout(() => setAiSaveMsg(''), 3000);
+      } else {
+        setAiTestMsg('保存失败');
+      }
+    } catch (err) {
+      console.error(err);
+      setAiTestMsg('保存出错');
+    }
+  };
+
+  const handleTestAi = async () => {
+    if (!aiUrl || !aiModel) {
+      setAiTestMsg('请填写API URL和模型');
+      return;
+    }
+    if (!aiKey || aiKey.includes('****')) {
+      setAiTestMsg('测试连接需要输入完整的API Key，请先重新输入');
+      return;
+    }
+    setTestingAi(true);
+    setAiTestMsg('测试中...');
+    try {
+      const res = await fetch('/api/admin/ai/test', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('adminToken')}`
+        },
+        body: JSON.stringify({
+          api_url: aiUrl,
+          api_key: aiKey,
+          model_id: aiModel
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setAiTestMsg('连接成功！');
+      } else {
+        setAiTestMsg('连接失败: ' + (data.error || '未知错误'));
+      }
+    } catch (err: any) {
+      setAiTestMsg('连接出错: ' + err.message);
+    } finally {
+      setTestingAi(false);
+    }
+  };
+
   return (
-    <div className="p-4 md:p-8 max-w-2xl mx-auto w-full overflow-y-auto h-full">
+    <div className="p-4 md:p-8 max-w-3xl mx-auto w-full overflow-y-auto h-full space-y-6">
       <h2 className="text-2xl font-bold text-zinc-900 mb-8">系统设置</h2>
       
+      {/* AI Settings Section */}
+      <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-zinc-200">
+        <div className="flex items-center gap-2 mb-4">
+          <div className="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center">
+            <span className="text-xl">🤖</span>
+          </div>
+          <h3 className="text-lg font-semibold text-zinc-900">AI 助手配置</h3>
+        </div>
+        <p className="text-sm text-zinc-500 mb-6">配置 OpenAI 兼容的 API 以在流程编辑器中启用 AI 对话辅助功能。</p>
+
+        {loadingAi ? (
+          <div className="text-sm text-zinc-500">加载中...</div>
+        ) : (
+          <form onSubmit={handleSaveAiSettings} className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 mb-1">API URL</label>
+                <input
+                  type="text"
+                  required
+                  value={aiUrl}
+                  onChange={e => setAiUrl(e.target.value)}
+                  placeholder="https://api.openai.com"
+                  className="w-full px-4 py-2 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 mb-1">API Key</label>
+                <input
+                  type="password"
+                  placeholder={aiKey ? '(已配置)' : 'sk-...'}
+                  onChange={e => setAiKey(e.target.value)}
+                  className="w-full px-4 py-2 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                />
+                <p className="text-xs text-zinc-500 mt-1">若不修改请留空</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 mb-1">模型 ID</label>
+                <input
+                  type="text"
+                  required
+                  value={aiModel}
+                  onChange={e => setAiModel(e.target.value)}
+                  placeholder="gpt-4o-mini"
+                  className="w-full px-4 py-2 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                />
+              </div>
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 mb-1">AI 系统提示词 (System Prompt)</label>
+              <textarea
+                value={aiPrompt}
+                onChange={e => setAiPrompt(e.target.value)}
+                rows={12}
+                className="w-full px-4 py-3 text-sm font-mono border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 bg-zinc-50 resize-none"
+              />
+              <p className="text-xs text-zinc-500 mt-1">此内容将作为系统级上下文发送给 AI，请在这描述您的系统和所需协助方式。</p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-4 pt-4 border-t border-zinc-100">
+              <button
+                type="submit"
+                className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-medium transition-colors"
+              >
+                保存配置
+              </button>
+              <button
+                type="button"
+                onClick={handleTestAi}
+                disabled={testingAi}
+                className="px-6 py-2.5 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 rounded-xl font-medium transition-colors disabled:opacity-50"
+              >
+                {testingAi ? '测试中...' : '测试连接'}
+              </button>
+              {aiSaveMsg && <span className="text-sm font-medium text-emerald-600 flex items-center gap-1"><CheckCircle2 className="w-4 h-4"/>{aiSaveMsg}</span>}
+              {aiTestMsg && (
+                <span className={clsx("text-sm font-medium", aiTestMsg.includes('成功') ? "text-emerald-600" : "text-amber-600")}>
+                  {aiTestMsg}
+                </span>
+              )}
+            </div>
+          </form>
+        )}
+      </div>
+
       <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-zinc-200">
         <h3 className="text-lg font-semibold text-zinc-900 mb-4">修改管理员密码</h3>
         
@@ -1133,7 +1317,7 @@ function ManageApps() {
   const [status, setStatus] = useState('enabled');
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<number | null>(null);
-  const [deletePreview, setDeletePreview] = useState<{ appName: string; workflowCount: number; keyCount: number; hasUiSchema: boolean } | null>(null);
+  const [deletePreview, setDeletePreview] = useState<{ appName: string; workflowCount: number; keyCount: number; unusedKeyCount?: number; hasUiSchema: boolean } | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   const fetchApps = async () => {
@@ -1311,8 +1495,8 @@ function ManageApps() {
                   >
                     <Play className="w-4 h-4" />
                     {(appWorkflows[app.id]?.length || 0) > 0 && (
-                      <span className="absolute -top-1 -right-1 w-4 h-4 bg-emerald-500 text-white text-[10px] rounded-full flex items-center justify-center">
-                        {appWorkflows[app.id].length}
+                      <span className="absolute -top-1 -right-2 px-1 bg-emerald-500 text-white text-[10px] rounded-full flex items-center justify-center whitespace-nowrap">
+                        已配置
                       </span>
                     )}
                   </button>
@@ -1418,6 +1602,13 @@ function ManageApps() {
               {deletePreview ? (
                 <div className="space-y-3 mt-4">
                   <p className="text-sm text-zinc-600 text-center">您即将删除应用 <strong className="text-zinc-900">{deletePreview.appName}</strong>，以下内容将被清除：</p>
+                  
+                  {(deletePreview.unusedKeyCount ?? 0) > 0 && (
+                    <div className="p-3 bg-red-50 text-red-700 rounded-xl text-sm font-medium border border-red-100">
+                      ⚠️ 仍有 {deletePreview.unusedKeyCount} 个卡密未使用，且参与 {deletePreview.appName} 应用流程中，删除本应用将同步删除这些卡密！
+                    </div>
+                  )}
+
                   <div className="bg-zinc-50 rounded-xl p-4 space-y-2">
                     {deletePreview.workflowCount > 0 && (
                       <div className="flex items-center gap-2 text-sm">
@@ -1433,8 +1624,8 @@ function ManageApps() {
                     )}
                     {deletePreview.keyCount > 0 && (
                       <div className="flex items-center gap-2 text-sm">
-                        <span className="w-2 h-2 rounded-full bg-amber-400"></span>
-                        <span className="text-zinc-700">解绑 <strong>{deletePreview.keyCount}</strong> 个卡密的应用映射 (卡密不会删除)</span>
+                        <span className="w-2 h-2 rounded-full bg-red-400"></span>
+                        <span className="text-zinc-700">级联删除 <strong>{deletePreview.keyCount}</strong> 个绑定的卡密及执行记录</span>
                       </div>
                     )}
                     {deletePreview.workflowCount === 0 && !deletePreview.hasUiSchema && deletePreview.keyCount === 0 && (

@@ -251,9 +251,10 @@ app.get('/api/admin/apps/:id/delete-preview', adminAuth, (req, res) => {
 
   const workflowCount = (db.prepare('SELECT COUNT(*) as count FROM workflows WHERE app_id = ?').get(appId) as any).count;
   const keyCount = (db.prepare('SELECT COUNT(*) as count FROM card_keys WHERE app_id = ?').get(appId) as any).count;
+  const unusedKeyCount = (db.prepare("SELECT COUNT(*) as count FROM card_keys WHERE app_id = ? AND status = 'unused'").get(appId) as any).count;
   const hasUiSchema = !!(appRow.ui_schema && appRow.ui_schema !== '[]');
 
-  res.json({ appName: appRow.name, workflowCount, keyCount, hasUiSchema });
+  res.json({ appName: appRow.name, workflowCount, keyCount, unusedKeyCount, hasUiSchema });
 });
 
 app.delete('/api/admin/apps/:id', adminAuth, (req, res) => {
@@ -270,8 +271,14 @@ app.delete('/api/admin/apps/:id', adminAuth, (req, res) => {
     }
     // 2. Delete all workflows
     db.prepare('DELETE FROM workflows WHERE app_id = ?').run(appId);
-    // 3. Unbind card keys (set app_id to NULL, don't delete them)
-    db.prepare('UPDATE card_keys SET app_id = NULL WHERE app_id = ?').run(appId);
+    
+    // 3. Delete executions of card keys bound to this app, then delete the keys
+    const keys = db.prepare('SELECT id FROM card_keys WHERE app_id = ?').all(appId) as any[];
+    for (const k of keys) {
+      db.prepare('DELETE FROM executions WHERE user_key_id = ?').run(k.id);
+    }
+    db.prepare('DELETE FROM card_keys WHERE app_id = ?').run(appId);
+    
     // 4. Delete the app itself (ui_schema goes with it)
     db.prepare('DELETE FROM apps WHERE id = ?').run(appId);
   });
@@ -400,20 +407,20 @@ app.post('/api/admin/pools/:id/keys', adminAuth, (req, res) => {
 
 // Get Dashboard Metrics
 app.get('/api/admin/dashboard/metrics', adminAuth, (req, res) => {
-  // 1. Inventory for Apps (Card Keys)
+  // 1. Inventory for Apps (Card Keys) — INNER JOIN excludes orphaned keys from deleted apps
   const appKeysCount = db.prepare(`
     SELECT apps.name as target_name, COUNT(*) as unused_count 
     FROM card_keys 
-    LEFT JOIN apps ON card_keys.app_id = apps.id 
+    INNER JOIN apps ON card_keys.app_id = apps.id 
     WHERE card_keys.status = 'unused' 
     GROUP BY card_keys.app_id
   `).all();
 
-  // 2. Inventory for Pools (Pool Keys)
+  // 2. Inventory for Pools (Pool Keys) — INNER JOIN excludes orphaned keys from deleted pools
   const poolKeysCount = db.prepare(`
     SELECT key_pools.name as target_name, COUNT(*) as unused_count 
     FROM pool_keys 
-    LEFT JOIN key_pools ON pool_keys.pool_id = key_pools.id 
+    INNER JOIN key_pools ON pool_keys.pool_id = key_pools.id 
     WHERE pool_keys.status = 'unused' 
     GROUP BY pool_keys.pool_id
   `).all();
@@ -774,6 +781,143 @@ app.get('/api/client/apps/:id/workflows', clientAuth, (req: any, res) => {
   }
   const workflows = db.prepare('SELECT id, name, trigger_id FROM workflows WHERE app_id = ?').all(appId);
   res.json(workflows);
+});
+
+// --- Settings CRUD ---
+const AI_SETTINGS_KEYS = ['ai_api_url', 'ai_api_key', 'ai_model_id', 'ai_system_prompt', 'inventory_alert_threshold'];
+
+app.get('/api/admin/settings', adminAuth, (req, res) => {
+  const result: Record<string, string> = {};
+  for (const key of AI_SETTINGS_KEYS) {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as any;
+    if (row) {
+      // Mask the API key for security
+      if (key === 'ai_api_key' && row.value) {
+        result[key] = row.value.length > 8
+          ? row.value.slice(0, 4) + '****' + row.value.slice(-4)
+          : '****';
+      } else {
+        result[key] = row.value;
+      }
+    }
+  }
+  res.json(result);
+});
+
+app.post('/api/admin/settings', adminAuth, (req, res) => {
+  const { settings } = req.body;
+  if (!settings || typeof settings !== 'object') {
+    return res.status(400).json({ error: 'Invalid settings' });
+  }
+  const upsert = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
+  const saveMany = db.transaction((entries: [string, string][]) => {
+    for (const [key, value] of entries) {
+      if (AI_SETTINGS_KEYS.includes(key)) {
+        upsert.run(key, value);
+      }
+    }
+  });
+  saveMany(Object.entries(settings));
+  res.json({ success: true });
+});
+
+// --- AI Chat Proxy ---
+app.post('/api/admin/ai/chat', adminAuth, async (req, res) => {
+  const { messages, node_context } = req.body;
+
+  // Load AI settings
+  const getVal = (key: string) => {
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as any;
+    return row?.value || '';
+  };
+
+  const apiUrl = getVal('ai_api_url');
+  const apiKey = getVal('ai_api_key');
+  const modelId = getVal('ai_model_id');
+  const systemPrompt = getVal('ai_system_prompt');
+
+  if (!apiUrl || !apiKey || !modelId) {
+    return res.status(400).json({ error: '请先在系统设置中配置 AI API（URL、Key、模型）' });
+  }
+
+  // Build messages array with system prompt
+  const fullMessages: any[] = [];
+
+  if (systemPrompt) {
+    let enrichedPrompt = systemPrompt;
+    // Append current workflow context if provided
+    if (node_context) {
+      enrichedPrompt += `\n\n## 当前工作流上下文\n${node_context}`;
+    }
+    fullMessages.push({ role: 'system', content: enrichedPrompt });
+  }
+
+  if (Array.isArray(messages)) {
+    fullMessages.push(...messages);
+  }
+
+  try {
+    const endpoint = apiUrl.replace(/\/+$/, '') + '/v1/chat/completions';
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: modelId,
+        messages: fullMessages,
+        temperature: 0.7,
+        max_tokens: 4096,
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      return res.status(response.status).json({ error: `AI API 错误 (${response.status}): ${errText.slice(0, 200)}` });
+    }
+
+    const data = await response.json();
+    const reply = data.choices?.[0]?.message?.content || '';
+    res.json({ reply, usage: data.usage });
+  } catch (err: any) {
+    res.status(500).json({ error: `AI API 请求失败: ${err.message}` });
+  }
+});
+
+// AI connection test
+app.post('/api/admin/ai/test', adminAuth, async (req, res) => {
+  const { api_url, api_key, model_id } = req.body;
+  if (!api_url || !api_key || !model_id) {
+    return res.status(400).json({ error: '缺少必要参数' });
+  }
+
+  try {
+    const endpoint = api_url.replace(/\/+$/, '') + '/v1/chat/completions';
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${api_key}`,
+      },
+      body: JSON.stringify({
+        model: model_id,
+        messages: [{ role: 'user', content: 'Hi, respond with "OK" only.' }],
+        max_tokens: 10,
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      return res.status(400).json({ error: `连接失败 (${response.status}): ${errText.slice(0, 200)}` });
+    }
+
+    const data = await response.json();
+    const reply = data.choices?.[0]?.message?.content || '';
+    res.json({ success: true, reply });
+  } catch (err: any) {
+    res.status(500).json({ error: `连接失败: ${err.message}` });
+  }
 });
 
 // --- Vite Middleware ---
