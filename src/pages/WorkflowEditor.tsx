@@ -13,6 +13,7 @@ import {
   useReactFlow,
   Handle,
   Position,
+  NodeResizer,
   type Node,
   type Edge,
   type Connection,
@@ -21,7 +22,7 @@ import {
   MarkerType,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { ArrowLeft, Save, Play, Code, Globe, GitBranch, Clock, MessageSquare, Zap, X, Trash2, HelpCircle, Database, CheckCircle2, XCircle, AlertTriangle, Bot, Send, Sparkles, Copy, Loader2, ChevronDown, FileText, GripVertical, LayoutGrid } from 'lucide-react';
+import { ArrowLeft, Save, Play, Code, Globe, GitBranch, Clock, MessageSquare, Zap, X, Trash2, HelpCircle, Database, CheckCircle2, XCircle, AlertTriangle, Bot, Send, Sparkles, Copy, Loader2, ChevronDown, FileText, GripVertical, LayoutGrid, Repeat2, Download, Upload } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -177,6 +178,46 @@ function FailEndNode({ data, selected }: NodeProps) {
   );
 }
 
+function LoopNode({ id, data, selected }: NodeProps) {
+  const maxIter = (data.maxIterations as number) || 10;
+  return (
+    <div className={clsx(
+      "rounded-2xl border-2 border-dashed bg-cyan-50/20 relative",
+      selected ? "border-cyan-500" : "border-cyan-300"
+    )} style={{ width: '100%', height: '100%', minWidth: 280, minHeight: 160 }}>
+      <NodeResizer
+        isVisible={selected}
+        minWidth={280}
+        minHeight={160}
+        lineClassName="!border-cyan-400"
+        handleClassName="!w-2.5 !h-2.5 !bg-cyan-500 !border-2 !border-white !rounded-sm"
+      />
+      <Handle type="target" position={Position.Top} className="!bg-cyan-500 !w-3 !h-3 !border-2 !border-white" />
+      {/* Header */}
+      <div className="bg-cyan-500 rounded-t-xl px-3 py-1.5 flex items-center justify-between pointer-events-none">
+        <div className="flex items-center gap-1.5">
+          <Repeat2 className="w-3.5 h-3.5 text-white" />
+          <span className="text-xs font-bold text-white">{data.label as string}</span>
+        </div>
+        <span className="text-[10px] px-1.5 py-0.5 bg-white/20 text-white font-medium rounded">最多 {maxIter} 次</span>
+      </div>
+      {/* Footer */}
+      <div className="absolute bottom-0 left-0 right-0 bg-white/90 rounded-b-xl border-t border-cyan-200 px-4 py-1.5 flex justify-between items-center pointer-events-none">
+        <div className="flex items-center gap-1">
+          <div className="w-2 h-2 rounded-full bg-emerald-500" />
+          <span className="text-[9px] font-semibold text-emerald-600">成功</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <div className="w-2 h-2 rounded-full bg-red-500" />
+          <span className="text-[9px] font-semibold text-red-600">失败/上限</span>
+        </div>
+      </div>
+      <Handle type="source" position={Position.Bottom} id="exit" className="!bg-emerald-500 !w-3 !h-3 !border-2 !border-white !left-[30%]" />
+      <Handle type="source" position={Position.Bottom} id="maxed" className="!bg-red-500 !w-3 !h-3 !border-2 !border-white !left-[70%]" />
+    </div>
+  );
+}
+
 const nodeTypes = {
   trigger: TriggerNode,
   script: ScriptNode,
@@ -187,6 +228,7 @@ const nodeTypes = {
   key_pool: KeyPoolNode,
   end_success: SuccessEndNode,
   end_fail: FailEndNode,
+  loop: LoopNode,
 };
 
 // ==================== Node Palette ====================
@@ -199,6 +241,7 @@ const NODE_PALETTE = [
   { type: 'condition', label: '条件分支', icon: GitBranch, color: 'purple', description: 'If/Else 判断', defaults: { expression: '' } },
   { type: 'delay', label: '延时等待', icon: Clock, color: 'sky', description: '暂停 N 秒', defaults: { seconds: 5 } },
   { type: 'log', label: '日志输出', icon: MessageSquare, color: 'rose', description: '输出信息给用户', defaults: { message: '' } },
+  { type: 'loop', label: '循环/重试', icon: Repeat2, color: 'cyan', description: '条件循环或重试', defaults: { expression: 'prev.result < 10', maxIterations: 10 } },
   { type: 'key_pool', label: '卡密库', icon: Database, color: 'orange', description: '从卡密库取卡密', defaults: { poolId: '', poolName: '' } },
   { type: 'end_success', label: '成功结束', icon: CheckCircle2, color: 'emerald', description: '流程成功结束', defaults: {} },
   { type: 'end_fail', label: '失败结束', icon: XCircle, color: 'red', description: '流程失败结束', defaults: {} },
@@ -515,6 +558,41 @@ function PropertiesPanel({ node, onChange, onDelete }: { node: Node | null; onCh
           />
           <p className="text-xs text-zinc-400 mt-1">支持 {'{{input.xxx}}'} / {'{{prev.xxx}}'} 模板变量</p>
         </div>
+      )}
+
+    {node.type === 'loop' && (
+        <>
+          <div>
+            <label className="block text-xs font-medium text-zinc-500 mb-1">循环条件 (为 True 时继续循环)</label>
+            <textarea
+              value={(node.data.expression as string) || ''}
+              onChange={e => updateData('expression', e.target.value)}
+              rows={3}
+              className="w-full px-3 py-1.5 text-sm font-mono border border-zinc-200 rounded-lg resize-none bg-zinc-50"
+              placeholder="例: prev.result < 10"
+            />
+            <div className="text-xs text-zinc-400 mt-1 space-y-0.5">
+              <p>将节点拖入循环组中，组内节点会被重复执行</p>
+              <p>每轮执行完后判断条件：</p>
+              <p>条件 <strong className="text-cyan-600">True</strong> → 继续下一轮循环</p>
+              <p>条件 <strong className="text-emerald-600">False</strong> → 从 <strong>成功</strong> 出口退出</p>
+              <p><strong className="text-red-500">达到上限</strong> → 从 <strong>失败/上限</strong> 出口退出</p>
+              <p>可用: <code className="bg-zinc-100 px-1 rounded">prev.xxx</code> (组内最后一个节点的输出)</p>
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-zinc-500 mb-1">最大循环次数</label>
+            <input
+              type="number"
+              min="1"
+              max="1000"
+              value={(node.data.maxIterations as number) || 10}
+              onChange={e => updateData('maxIterations', parseInt(e.target.value) || 10)}
+              className="w-full px-3 py-1.5 text-sm border border-zinc-200 rounded-lg"
+            />
+            <p className="text-[11px] text-zinc-400 mt-1">防止无限循环，达到上限后自动退出</p>
+          </div>
+        </>
       )}
 
     {node.type === 'key_pool' && (
@@ -915,6 +993,32 @@ function WorkflowEditorInner() {
   const reactFlow = useReactFlow();
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
 
+  // Properties panel resizable state
+  const [propsPanelWidth, setPropsPanelWidth] = useState(() => {
+    const saved = localStorage.getItem('propsPanelWidth');
+    return saved ? parseInt(saved) : 288;
+  });
+  const [isResizingProps, setIsResizingProps] = useState(false);
+
+  useEffect(() => {
+    if (!isResizingProps) return;
+    const handleMouseMove = (e: MouseEvent) => {
+      const newWidth = window.innerWidth - e.clientX;
+      const clamped = Math.max(240, Math.min(600, newWidth));
+      setPropsPanelWidth(clamped);
+    };
+    const handleMouseUp = () => {
+      setIsResizingProps(false);
+      localStorage.setItem('propsPanelWidth', String(propsPanelWidth));
+    };
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizingProps, propsPanelWidth]);
+
   // AI Assistant states
   const [isAiOpen, setIsAiOpen] = useState(false);
   const [aiMessages, setAiMessages] = useState<{ role: 'user' | 'assistant', content: string }[]>([]);
@@ -1005,7 +1109,11 @@ function WorkflowEditorInner() {
           if (wf) {
             setWorkflowName(wf.name);
             const parsedNodes = JSON.parse(wf.nodes || '[]');
-            const parsedEdges = JSON.parse(wf.edges || '[]');
+            const parsedEdges = (JSON.parse(wf.edges || '[]') as Edge[]).map(e => ({
+              ...e,
+              markerEnd: e.markerEnd || { type: MarkerType.ArrowClosed, width: 16, height: 16 },
+              animated: e.animated ?? true,
+            }));
             setNodes(parsedNodes);
             setEdges(parsedEdges);
             // Set counter to avoid id conflicts
@@ -1073,9 +1181,42 @@ function WorkflowEditorInner() {
         y: center.y + (Math.random() - 0.5) * 60,
       },
       data: { label: paletteItem.label, ...paletteItem.defaults },
+      ...(paletteItem.type === 'loop' ? { style: { width: 400, height: 250 }, zIndex: -1 } : {}),
     };
     setNodes(nds => [...nds, newNode]);
   }, [setNodes, reactFlow]);
+
+  // Auto-parent nodes when dropped inside a loop group
+  const onNodeDragStop = useCallback((_: any, draggedNode: Node) => {
+    if (draggedNode.type === 'loop') return;
+    setNodes(nds => {
+      const loopNodes = nds.filter(n => n.type === 'loop' && n.id !== draggedNode.id);
+      // Absolute position of dragged node
+      const oldParent = draggedNode.parentId ? nds.find(n => n.id === draggedNode.parentId) : null;
+      const absX = draggedNode.position.x + (oldParent?.position.x || 0);
+      const absY = draggedNode.position.y + (oldParent?.position.y || 0);
+      
+      let foundParent: Node | null = null;
+      for (const ln of loopNodes) {
+        const lw = (ln.measured?.width ?? (ln.style?.width as number)) || 400;
+        const lh = (ln.measured?.height ?? (ln.style?.height as number)) || 250;
+        if (absX > ln.position.x && absX < ln.position.x + lw && absY > ln.position.y && absY < ln.position.y + lh) {
+          foundParent = ln;
+          break;
+        }
+      }
+      return nds.map(n => {
+        if (n.id !== draggedNode.id) return n;
+        if (foundParent && draggedNode.parentId !== foundParent.id) {
+          return { ...n, parentId: foundParent.id, extent: 'parent' as const, position: { x: absX - foundParent.position.x, y: absY - foundParent.position.y } };
+        } else if (!foundParent && draggedNode.parentId) {
+          const { parentId, extent, ...rest } = n as any;
+          return { ...rest, position: { x: absX, y: absY } };
+        }
+        return n;
+      });
+    });
+  }, [setNodes]);
 
   // Auto-layout using dagre
   const autoLayout = useCallback(() => {
@@ -1119,6 +1260,59 @@ function WorkflowEditorInner() {
     setTimeout(() => reactFlow.fitView({ padding: 0.2, duration: 300 }), 50);
   }, [nodes, edges, setNodes, reactFlow]);
 
+  // Export workflow as JSON
+  const handleExport = () => {
+    const data = {
+      name: workflowName,
+      nodes: nodes.map(n => ({ id: n.id, type: n.type, data: n.data, position: n.position })),
+      edges: edges.map(e => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle })),
+      exportedAt: new Date().toISOString(),
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `workflow_${workflowName || 'untitled'}_${Date.now()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Import workflow from JSON
+  const handleImport = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = (e: any) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const data = JSON.parse(ev.target?.result as string);
+          if (!data.nodes || !data.edges) {
+            alert('无效的工作流文件');
+            return;
+          }
+          if (!confirm(`确认导入工作流「${data.name || '未命名'}\u300d\uff1f\u5f53前编辑内容将被覆盖\u3002`)) return;
+          setNodes(data.nodes);
+          setEdges((data.edges as Edge[]).map((e: any) => ({
+            ...e,
+            markerEnd: e.markerEnd || { type: MarkerType.ArrowClosed, width: 16, height: 16 },
+            animated: e.animated ?? true,
+          })));
+          if (data.name) setWorkflowName(data.name);
+          setTimeout(() => reactFlow.fitView({ padding: 0.2, duration: 300 }), 100);
+        } catch {
+          alert('解析 JSON 失败\uff0c请检查文件格式');
+        }
+      };
+      reader.readAsText(file);
+    };
+    input.click();
+  };
+
   // Save workflow
   const handleSave = async () => {
     setSaving(true);
@@ -1131,6 +1325,10 @@ function WorkflowEditorInner() {
         type: n.type,
         position: n.position,
         data: n.data,
+        ...(n.parentId ? { parentId: n.parentId } : {}),
+        ...((n as any).extent ? { extent: (n as any).extent } : {}),
+        ...(n.style ? { style: n.style } : {}),
+        ...(n.zIndex != null ? { zIndex: n.zIndex } : {}),
       }));
       const cleanEdges = edges.map(e => ({
         id: e.id,
@@ -1138,6 +1336,8 @@ function WorkflowEditorInner() {
         target: e.target,
         sourceHandle: e.sourceHandle || null,
         targetHandle: e.targetHandle || null,
+        markerEnd: e.markerEnd || { type: MarkerType.ArrowClosed, width: 16, height: 16 },
+        animated: e.animated ?? true,
       }));
 
       const nodesJson = JSON.stringify(cleanNodes);
@@ -1164,8 +1364,13 @@ function WorkflowEditorInner() {
           reachable.add(id);
           cleanEdges.filter(e => e.source === id).forEach(e => queue.push(e.target));
           cleanEdges.filter(e => e.target === id).forEach(e => queue.push(e.source));
+          // If this is a loop group, mark all its children as reachable too
+          const childrenOfThis = cleanNodes.filter(n => (n as any).parentId === id);
+          for (const child of childrenOfThis) {
+            reachable.add(child.id);
+          }
         }
-        const orphans = cleanNodes.filter(n => !reachable.has(n.id));
+        const orphans = cleanNodes.filter(n => !reachable.has(n.id) && !(n as any).parentId);
         if (orphans.length > 0) {
           const names = orphans.map(n => n.data.label || n.id).join(', ');
           errors.push(`\u5b58\u5728\u5b64\u7acb\u8282\u70b9: ${names}`);
@@ -1249,6 +1454,22 @@ function WorkflowEditorInner() {
             整理布局
           </button>
           <button
+            onClick={handleExport}
+            title="导出工作流 JSON"
+            className="flex items-center gap-2 px-3 py-2 bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-700 rounded-lg font-medium text-sm transition-colors"
+          >
+            <Download className="w-4 h-4" />
+            导出
+          </button>
+          <button
+            onClick={handleImport}
+            title="从 JSON 导入工作流"
+            className="flex items-center gap-2 px-3 py-2 bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-700 rounded-lg font-medium text-sm transition-colors"
+          >
+            <Upload className="w-4 h-4" />
+            导入
+          </button>
+          <button
             onClick={handleSave}
             disabled={saving}
             className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium text-sm transition-colors disabled:opacity-50"
@@ -1295,6 +1516,7 @@ function WorkflowEditorInner() {
             onNodeClick={onNodeClick}
             onEdgeClick={onEdgeClick}
             onPaneClick={onPaneClick}
+            onNodeDragStop={onNodeDragStop}
             nodeTypes={nodeTypes}
             fitView
             deleteKeyCode={['Delete', 'Backspace']}
@@ -1323,10 +1545,19 @@ function WorkflowEditorInner() {
           </ReactFlow>
         </div>
 
-        {/* Properties Panel (Right) */}
-        <div className="w-72 bg-white border-l border-zinc-200 shrink-0 flex flex-col">
-          <div className="p-3 border-b border-zinc-100">
+        {/* Properties Panel Resize Handle */}
+        <div
+          onMouseDown={() => setIsResizingProps(true)}
+          className={clsx(
+            "w-1 shrink-0 cursor-col-resize transition-colors hover:bg-indigo-300 active:bg-indigo-400",
+            isResizingProps ? "bg-indigo-400" : "bg-transparent"
+          )}
+        />
+        {/* Properties Panel (Right) - Resizable */}
+        <div className="bg-white border-l border-zinc-200 shrink-0 flex flex-col" style={{ width: propsPanelWidth }}>
+          <div className="p-3 border-b border-zinc-100 flex items-center justify-between">
             <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">属性配置</h3>
+            <span className="text-[10px] text-zinc-400 flex items-center gap-1"><GripVertical className="w-3 h-3" />可拖动</span>
           </div>
           <div className="flex-1 overflow-y-auto">
             <PropertiesPanel node={selectedNode} onChange={onNodeDataChange} onDelete={onNodeDelete} />

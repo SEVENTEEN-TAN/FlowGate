@@ -157,7 +157,7 @@ app.post('/api/admin/login', (req, res) => {
     return res.status(401).json({ error: 'Invalid credentials' });
   }
   
-  const token = jwt.sign({ role: 'admin' }, JWT_SECRET, { expiresIn: '24h' });
+  const token = jwt.sign({ role: 'admin' }, JWT_SECRET, { expiresIn: '3h' });
   res.json({ token });
 });
 
@@ -500,16 +500,28 @@ app.get('/api/admin/keys', adminAuth, (req, res) => {
   const page = parseInt(req.query.page as string) || 1;
   const limit = parseInt(req.query.limit as string) || 10;
   const search = (req.query.search as string) || '';
+  const appIdFilter = req.query.app_id as string || '';
   const offset = (page - 1) * limit;
 
   let query = 'SELECT card_keys.*, apps.name as app_name FROM card_keys LEFT JOIN apps ON card_keys.app_id = apps.id';
   let countQuery = 'SELECT COUNT(*) as total FROM card_keys';
+  const conditions: string[] = [];
   const params: any[] = [];
 
   if (search) {
-    query += ' WHERE key_string LIKE ? OR remark LIKE ?';
-    countQuery += ' WHERE key_string LIKE ? OR remark LIKE ?';
+    conditions.push('(key_string LIKE ? OR remark LIKE ?)');
     params.push(`%${search}%`, `%${search}%`);
+  }
+
+  if (appIdFilter) {
+    conditions.push('card_keys.app_id = ?');
+    params.push(appIdFilter);
+  }
+
+  if (conditions.length > 0) {
+    const where = ' WHERE ' + conditions.join(' AND ');
+    query += where;
+    countQuery += where;
   }
 
   query += ' ORDER BY card_keys.created_at DESC LIMIT ? OFFSET ?';

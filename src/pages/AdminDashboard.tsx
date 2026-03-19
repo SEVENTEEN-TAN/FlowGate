@@ -176,6 +176,7 @@ function ManageKeys() {
   const [limit, setLimit] = useState(10);
   
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [filterAppId, setFilterAppId] = useState<string>('');
   
   // Modals state
   const [isGenerateModalOpen, setIsGenerateModalOpen] = useState(false);
@@ -221,7 +222,9 @@ function ManageKeys() {
   }, []);
 
   const fetchKeys = async () => {
-    const res = await fetch(`/api/admin/keys?page=${page}&limit=${limit}&search=${encodeURIComponent(searchQuery)}`, {
+    let url = `/api/admin/keys?page=${page}&limit=${limit}&search=${encodeURIComponent(searchQuery)}`;
+    if (filterAppId) url += `&app_id=${filterAppId}`;
+    const res = await fetch(url, {
       headers: { Authorization: `Bearer ${localStorage.getItem('adminToken')}` }
     });
     if (res.ok) {
@@ -234,7 +237,7 @@ function ManageKeys() {
   useEffect(() => {
     fetchKeys();
     setSelectedIds([]); // Clear selection when page or search changes
-  }, [page, limit, searchQuery]);
+  }, [page, limit, searchQuery, filterAppId]);
 
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearchQuery(e.target.value);
@@ -390,17 +393,27 @@ function ManageKeys() {
       </div>
 
       <div className="bg-white rounded-2xl shadow-sm border border-zinc-200 flex flex-col min-h-0 flex-1">
-        <div className="p-4 border-b border-zinc-200 bg-zinc-50/50 flex items-center shrink-0">
-          <div className="relative w-full sm:max-w-md">
+        <div className="p-4 border-b border-zinc-200 bg-zinc-50/50 flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
+          <div className="relative flex-1 sm:max-w-md">
             <Search className="w-5 h-5 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input 
               type="text" 
-              placeholder="搜索卡密或备注..." 
+              placeholder="搜索口令或备注..." 
               value={searchQuery}
               onChange={handleSearchChange}
               className="w-full pl-10 pr-4 py-2 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-colors"
             />
           </div>
+          <select
+            value={filterAppId}
+            onChange={e => { setFilterAppId(e.target.value); setPage(1); }}
+            className="px-4 py-2 border border-zinc-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-sm text-zinc-700 min-w-[140px]"
+          >
+            <option value="">全部应用</option>
+            {apps.map(a => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
         </div>
         
         <div className="overflow-auto flex-1 relative">
@@ -2305,14 +2318,24 @@ function DashboardOverview() {
     fetch(`/api/admin/dashboard/metrics?period=${timeRange}`, {
       headers: { Authorization: `Bearer ${localStorage.getItem('adminToken')}` }
     })
-    .then(r => r.json())
+    .then(r => {
+      if (!r.ok) {
+        if (r.status === 401) {
+          localStorage.removeItem('adminToken');
+          window.location.href = '/admin/login';
+        }
+        throw new Error('Failed to load metrics');
+      }
+      return r.json();
+    })
     .then(data => {
       setMetrics(data);
       if (data.inventory_threshold !== undefined) {
         setThreshold(data.inventory_threshold);
       }
       setLoading(false);
-    });
+    })
+    .catch(() => setLoading(false));
   }, [timeRange]);
 
   const handleSaveThreshold = async () => {

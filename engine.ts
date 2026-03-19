@@ -20,6 +20,7 @@ interface WorkflowNode {
   type: string;
   data: Record<string, any>;
   position?: { x: number; y: number };
+  parentId?: string;
 }
 
 interface WorkflowEdge {
@@ -511,27 +512,56 @@ export async function executeWorkflow(
     context[node.id] = { output: null, status: 'pending' };
   }
 
-  const sortedIds = topologicalSort(nodes, edges);
   const nodeMap = new Map(nodes.map(n => [n.id, n]));
+  
+  // Track loop counters
+  const loopCounters: Record<string, number> = {};
 
-  // Track which nodes to skip (from condition branching)
-  const skipNodes = new Set<string>();
+  // Find starting nodes (no incoming edges, and not children of a loop group)
+  const childNodeIds = new Set(nodes.filter(n => n.parentId).map(n => n.id));
+  const hasIncoming = new Set(edges.map(e => e.target));
+  const startNodes = nodes.filter(n => !hasIncoming.has(n.id) && !n.parentId);
+  
+  if (startNodes.length === 0) {
+    log('[错误] 工作流没有入口节点');
+    return { status: 'failed', context, logs };
+  }
 
   log('=== 工作流开始执行 ===');
   log(`[参数] 用户输入: ${JSON.stringify(userParams)}`);
 
-  for (const nodeId of sortedIds) {
-    if (skipNodes.has(nodeId)) {
+  // BFS-based execution following edges
+  const executed = new Set<string>();
+  const queue: string[] = startNodes.map(n => n.id);
+  // Track which nodes to skip (from condition branching)
+  const skipNodes = new Set<string>();
+
+  while (queue.length > 0) {
+    const nodeId = queue.shift()!;
+    
+    if (skipNodes.has(nodeId) || childNodeIds.has(nodeId)) {
       context[nodeId].status = 'success';
       context[nodeId].output = {};
       log(`[跳过] 节点 ${nodeId} (条件分支跳过)`);
+      // Still follow edges from skipped nodes? No - skipNodes includes all downstream
+      continue;
+    }
+
+    // Check all incoming edges are from executed or skipped nodes (except loop-back edges)
+    const incomingEdges = edges.filter(e => e.target === nodeId);
+    const incomingReady = incomingEdges.every(e => {
+      return executed.has(e.source) || skipNodes.has(e.source);
+    });
+    if (!incomingReady && incomingEdges.length > 0) {
+      // Not all dependencies met, re-queue
+      queue.push(nodeId);
       continue;
     }
 
     const node = nodeMap.get(nodeId);
     if (!node) continue;
 
-    // Build extras: input = trigger output (user form), prev = previous node output
+    // Build extras
     const input = findTriggerOutput(context, nodes);
     const prev = findPrevOutput(nodeId, edges, context);
     const extras = { input, prev };
@@ -591,6 +621,115 @@ export async function executeWorkflow(
           }
           break;
         }
+        case 'loop': {
+          // Group-based loop: find child nodes, execute them repeatedly
+          const maxIter = node.data.maxIterations || 10;
+          const childNodes = nodes.filter(n => n.parentId === nodeId);
+          const childIds = new Set(childNodes.map(n => n.id));
+          // Edges between child nodes only
+          const childEdges = edges.filter(e => childIds.has(e.source) && childIds.has(e.target));
+          
+          if (childNodes.length === 0) {
+            log(`[循环] ⚠️ 循环组内没有节点，跳过`);
+            output = { result: false, iteration: 0, maxIterations: maxIter, exitReason: 'no_children' };
+            // Follow exit
+            const maxedEdges = edges.filter(e => e.source === nodeId && e.sourceHandle === 'maxed');
+            for (const e of maxedEdges) skipNodes.add(e.target);
+            break;
+          }
+
+          log(`[循环] 开始循环，组内有 ${childNodes.length} 个节点，最多 ${maxIter} 次`);
+          
+          let iteration = 0;
+          let condResult = true;
+          let lastChildOutput: any = {};
+          
+          while (condResult && iteration < maxIter) {
+            iteration++;
+            log(`[循环] === 第 ${iteration}/${maxIter} 轮 ===`);
+            
+            // Reset child contexts
+            for (const cn of childNodes) {
+              context[cn.id] = { output: null, status: 'pending' };
+            }
+            
+            // Execute children in topological order
+            const childSorted = topologicalSort(childNodes, childEdges);
+            let childFailed = false;
+            
+            for (const cid of childSorted) {
+              const cnode = nodeMap.get(cid);
+              if (!cnode) continue;
+              
+              const cInput = findTriggerOutput(context, nodes);
+              const cPrev = findPrevOutput(cid, childEdges.length > 0 ? childEdges : edges, context);
+              const cExtras = { input: cInput, prev: cPrev };
+              
+              context[cid].status = 'running';
+              log(`  --- [轮${iteration}] 执行: ${cnode.data.label || cid} (${cnode.type}) ---`);
+              
+              try {
+                let cOutput: any;
+                switch (cnode.type) {
+                  case 'script':
+                    cOutput = cnode.data.scriptType === 'python'
+                      ? await executePythonScript(cnode, context, log, cExtras)
+                      : await executeJsScript(cnode, context, log, cExtras);
+                    break;
+                  case 'http':
+                    cOutput = await executeHttpRequest(cnode, context, log, cExtras);
+                    break;
+                  case 'delay':
+                    cOutput = await executeDelayNode(cnode, context, log);
+                    break;
+                  case 'log':
+                    cOutput = executeLogNode(cnode, context, log, cExtras);
+                    break;
+                  case 'key_pool':
+                    cOutput = await executeKeyPoolNode(cnode, context, log, userParams);
+                    break;
+                  default:
+                    cOutput = {};
+                }
+                context[cid].output = cOutput;
+                context[cid].status = 'success';
+                lastChildOutput = cOutput;
+              } catch (err: any) {
+                context[cid].status = 'failed';
+                context[cid].error = err.message;
+                log(`  [错误] 子节点执行失败: ${err.message}`);
+                childFailed = true;
+                break;
+              }
+            }
+            
+            if (childFailed) {
+              log(`[循环] 子节点执行失败，退出循环`);
+              condResult = false;
+              break;
+            }
+            
+            // Evaluate condition using last child output as prev
+            const condExtras = { input: findTriggerOutput(context, nodes), prev: lastChildOutput };
+            condResult = evaluateCondition(node, context, log, condExtras);
+          }
+          
+          // Determine exit
+          if (iteration >= maxIter && condResult) {
+            log(`[循环] ⚠️ 达到最大循环次数 ${maxIter}，强制退出`);
+            output = { result: false, iteration, maxIterations: maxIter, exitReason: 'max_iterations', lastOutput: lastChildOutput };
+            // Follow maxed, skip exit
+            const exitEdges = edges.filter(e => e.source === nodeId && e.sourceHandle === 'exit');
+            for (const e of exitEdges) skipNodes.add(e.target);
+          } else {
+            log(`[循环] ✅ 条件为 False，共循环 ${iteration} 次，正常退出`);
+            output = { result: false, iteration, maxIterations: maxIter, exitReason: 'condition_false', lastOutput: lastChildOutput };
+            // Follow exit, skip maxed
+            const maxedEdges = edges.filter(e => e.source === nodeId && e.sourceHandle === 'maxed');
+            for (const e of maxedEdges) skipNodes.add(e.target);
+          }
+          break;
+        }
         case 'delay':
           output = await executeDelayNode(node, context, log);
           break;
@@ -608,7 +747,7 @@ export async function executeWorkflow(
           return { status: 'success', context, logs };
         case 'end_fail':
           context[nodeId].output = { __end: 'fail' };
-          context[nodeId].status = 'success'; // node itself executed OK
+          context[nodeId].status = 'success';
           log('❌ 工作流执行失败（失败结束节点）');
           log('=== 工作流执行失败 ===');
           return { status: 'failed', context, logs };
@@ -619,12 +758,20 @@ export async function executeWorkflow(
 
       context[nodeId].output = output;
       context[nodeId].status = 'success';
+      executed.add(nodeId);
+      
+      // Queue downstream nodes
+      const outEdges = edges.filter(e => e.source === nodeId);
+      for (const e of outEdges) {
+        if (!executed.has(e.target) && !queue.includes(e.target)) {
+          queue.push(e.target);
+        }
+      }
     } catch (err: any) {
       context[nodeId].status = 'failed';
       context[nodeId].error = err.message;
       log(`[错误] 节点执行失败: ${err.message}`);
       
-      // Fail fast - stop execution on error
       log('=== 工作流执行失败 ===');
       return { status: 'failed', context, logs };
     }

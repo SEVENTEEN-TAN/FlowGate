@@ -383,7 +383,7 @@ function renderFormComponent(
           {comp.label && <h3 className="text-lg font-bold text-zinc-900 mb-3">{comp.label}</h3>}
           <div 
             className="w-full prose prose-sm max-w-none prose-zinc overflow-hidden" 
-            dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(comp.defaultValue || '') }} 
+            dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(comp.defaultValue || '', { ADD_ATTR: ['target'] }) }} 
           />
         </div>
       );
