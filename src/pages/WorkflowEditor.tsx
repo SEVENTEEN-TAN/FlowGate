@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useLayoutEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import Dagre from '@dagrejs/dagre';
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -20,7 +21,7 @@ import {
   MarkerType,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { ArrowLeft, Save, Play, Code, Globe, GitBranch, Clock, MessageSquare, Zap, X, Trash2, HelpCircle, Database, CheckCircle2, XCircle, AlertTriangle, Bot, Send, Sparkles, Copy, Loader2, ChevronDown, FileText, GripVertical } from 'lucide-react';
+import { ArrowLeft, Save, Play, Code, Globe, GitBranch, Clock, MessageSquare, Zap, X, Trash2, HelpCircle, Database, CheckCircle2, XCircle, AlertTriangle, Bot, Send, Sparkles, Copy, Loader2, ChevronDown, FileText, GripVertical, LayoutGrid } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -1076,6 +1077,48 @@ function WorkflowEditorInner() {
     setNodes(nds => [...nds, newNode]);
   }, [setNodes, reactFlow]);
 
+  // Auto-layout using dagre
+  const autoLayout = useCallback(() => {
+    const g = new Dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
+    g.setGraph({
+      rankdir: 'TB',   // top-to-bottom
+      nodesep: 80,      // horizontal spacing
+      ranksep: 100,     // vertical spacing
+      marginx: 40,
+      marginy: 40,
+    });
+
+    nodes.forEach((node) => {
+      // Use approximate node dimensions
+      const width = node.type === 'condition' ? 200 : 180;
+      const height = node.type === 'condition' ? 80 : 60;
+      g.setNode(node.id, { width, height });
+    });
+
+    edges.forEach((edge) => {
+      g.setEdge(edge.source, edge.target);
+    });
+
+    Dagre.layout(g);
+
+    const layoutedNodes = nodes.map((node) => {
+      const dagreNode = g.node(node.id);
+      const width = node.type === 'condition' ? 200 : 180;
+      const height = node.type === 'condition' ? 80 : 60;
+      return {
+        ...node,
+        position: {
+          x: dagreNode.x - width / 2,
+          y: dagreNode.y - height / 2,
+        },
+      };
+    });
+
+    setNodes(layoutedNodes);
+    // Fit view after layout with a small delay
+    setTimeout(() => reactFlow.fitView({ padding: 0.2, duration: 300 }), 50);
+  }, [nodes, edges, setNodes, reactFlow]);
+
   // Save workflow
   const handleSave = async () => {
     setSaving(true);
@@ -1198,6 +1241,14 @@ function WorkflowEditorInner() {
         <div className="flex items-center gap-3">
           {saveMsg && <span className="text-sm text-emerald-600 font-medium">{saveMsg}</span>}
           <button
+            onClick={autoLayout}
+            title="一键整理布局"
+            className="flex items-center gap-2 px-3 py-2 bg-white border border-zinc-200 hover:bg-zinc-50 text-zinc-700 rounded-lg font-medium text-sm transition-colors"
+          >
+            <LayoutGrid className="w-4 h-4" />
+            整理布局
+          </button>
+          <button
             onClick={handleSave}
             disabled={saving}
             className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium text-sm transition-colors disabled:opacity-50"
@@ -1248,6 +1299,7 @@ function WorkflowEditorInner() {
             fitView
             deleteKeyCode={['Delete', 'Backspace']}
             selectionOnDrag
+            panOnDrag={[1, 2]}
             selectionMode={SelectionMode.Partial}
             defaultEdgeOptions={{ style: { strokeWidth: 2 }, interactionWidth: 20, selectable: true }}
             className="bg-zinc-50"

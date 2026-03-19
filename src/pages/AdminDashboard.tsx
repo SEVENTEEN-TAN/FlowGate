@@ -2292,6 +2292,7 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 }
 
 function DashboardOverview() {
+  const navigate = useNavigate();
   const [metrics, setMetrics] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [timeRange, setTimeRange] = useState<'today'|'yesterday'|'week'|'month'>('today');
@@ -2407,20 +2408,40 @@ function DashboardOverview() {
             </div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {metrics.inventory_pools.map((p: any) => (
-              <div key={p.target_name} className={clsx("p-4 rounded-xl border flex justify-between items-center transition-all", p.unused_count < threshold ? "bg-red-50 border-red-200 shadow-sm" : "bg-zinc-50 border-zinc-200")}>
-                <span className="font-medium text-zinc-700">{p.target_name || '未命名卡密库'}</span>
-                <span className={clsx("font-bold text-lg", p.unused_count < threshold ? "text-red-600" : "text-emerald-600")}>{p.unused_count} <span className="text-xs font-normal opacity-70">张可用</span></span>
+            {metrics.inventory_apps.map((a: any) => (
+              <div
+                key={'app-' + a.target_name}
+                onClick={() => navigate('/admin')}
+                className={clsx(
+                  "p-4 rounded-xl border flex justify-between items-center transition-all cursor-pointer hover:shadow-md hover:-translate-y-0.5 group",
+                  a.unused_count < threshold ? "bg-amber-50 border-amber-200 shadow-sm" : "bg-zinc-50 border-zinc-200 hover:border-indigo-200"
+                )}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-700 tracking-wide">口令</span>
+                  <span className="font-medium text-zinc-700 truncate group-hover:text-indigo-700 transition-colors">{a.target_name || '未绑定应用'}</span>
+                </div>
+                <span className={clsx("font-bold text-lg shrink-0 ml-3", a.unused_count < threshold ? "text-amber-600" : "text-emerald-600")}>{a.unused_count} <span className="text-xs font-normal opacity-70">张可用</span></span>
               </div>
             ))}
-            {metrics.inventory_apps.map((a: any) => (
-              <div key={a.target_name} className={clsx("p-4 rounded-xl border flex justify-between items-center transition-all", a.unused_count < threshold ? "bg-amber-50 border-amber-200 shadow-sm" : "bg-zinc-50 border-zinc-200")}>
-                <span className="font-medium text-zinc-700">{a.target_name || '未绑定应用'} (直发)</span>
-                <span className={clsx("font-bold text-lg", a.unused_count < threshold ? "text-amber-600" : "text-emerald-600")}>{a.unused_count} <span className="text-xs font-normal opacity-70">张可用</span></span>
+            {metrics.inventory_pools.map((p: any) => (
+              <div
+                key={'pool-' + p.target_name}
+                onClick={() => navigate('/admin/pools')}
+                className={clsx(
+                  "p-4 rounded-xl border flex justify-between items-center transition-all cursor-pointer hover:shadow-md hover:-translate-y-0.5 group",
+                  p.unused_count < threshold ? "bg-red-50 border-red-200 shadow-sm" : "bg-zinc-50 border-zinc-200 hover:border-indigo-200"
+                )}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold bg-teal-100 text-teal-700 tracking-wide">卡密</span>
+                  <span className="font-medium text-zinc-700 truncate group-hover:text-indigo-700 transition-colors">{p.target_name || '未命名卡密库'}</span>
+                </div>
+                <span className={clsx("font-bold text-lg shrink-0 ml-3", p.unused_count < threshold ? "text-red-600" : "text-emerald-600")}>{p.unused_count} <span className="text-xs font-normal opacity-70">张可用</span></span>
               </div>
             ))}
             {metrics.inventory_pools.length === 0 && metrics.inventory_apps.length === 0 && (
-              <div className="text-zinc-500 text-sm py-2">暂无未使用的卡密库存</div>
+              <div className="text-zinc-500 text-sm py-2">暂无未使用的库存</div>
             )}
           </div>
         </div>
