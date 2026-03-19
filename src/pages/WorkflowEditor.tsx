@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ReactFlow,
@@ -18,7 +18,7 @@ import {
   MarkerType,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { ArrowLeft, Save, Play, Code, Globe, GitBranch, Clock, MessageSquare, Zap, X, Trash2, HelpCircle, Database, CheckCircle2, XCircle, AlertTriangle, Bot, Send, Sparkles, Copy, Loader2, ChevronDown, FileText } from 'lucide-react';
+import { ArrowLeft, Save, Play, Code, Globe, GitBranch, Clock, MessageSquare, Zap, X, Trash2, HelpCircle, Database, CheckCircle2, XCircle, AlertTriangle, Bot, Send, Sparkles, Copy, Loader2, ChevronDown, FileText, GripVertical } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -528,9 +528,328 @@ function KeyPoolSelector({ poolId, onChange }: { poolId: string; onChange: (id: 
         </div>
       )}
       {pools.length === 0 && (
-        <p className="text-xs text-amber-500 mt-1">暂无卡密库，请先在“卡密库”管理页创建</p>
+        <p className="text-xs text-amber-500 mt-1">暂无卡密库，请先在"卡密库"管理页创建</p>
       )}
     </div>
+  );
+}
+
+// ==================== AI Chat Panel (Resizable) ====================
+
+interface AiChatPanelProps {
+  isOpen: boolean;
+  onClose: () => void;
+  aiMessages: { role: 'user' | 'assistant', content: string }[];
+  aiInput: string;
+  setAiInput: (v: string) => void;
+  aiLoading: boolean;
+  onSendMessage: (e?: React.FormEvent) => void;
+  selectedNode: Node | null;
+  onApplyCode: (code: string) => void;
+  messagesEndRef: React.RefObject<HTMLDivElement | null>;
+}
+
+function AiChatPanel({
+  isOpen,
+  onClose,
+  aiMessages,
+  aiInput,
+  setAiInput,
+  aiLoading,
+  onSendMessage,
+  selectedNode,
+  onApplyCode,
+  messagesEndRef,
+}: AiChatPanelProps) {
+  const [panelWidth, setPanelWidth] = useState(420);
+  const [isResizing, setIsResizing] = useState(false);
+  const [editingMessageIdx, setEditingMessageIdx] = useState<number | null>(null);
+  const [editedCode, setEditedCode] = useState('');
+  const resizerRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    const saved = localStorage.getItem('aiPanelWidth');
+    if (saved) setPanelWidth(parseInt(saved));
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isResizing) return;
+    const handleMouseMove = (e: MouseEvent) => {
+      const newWidth = window.innerWidth - e.clientX;
+      const clamped = Math.max(320, Math.min(800, newWidth));
+      setPanelWidth(clamped);
+    };
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      localStorage.setItem('aiPanelWidth', String(panelWidth));
+    };
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing, panelWidth]);
+
+  const extractCodeBlocks = (content: string): string[] => {
+    const matches = content.match(/```(?:javascript|js|python)?\n([\s\S]*?)```/g) || [];
+    return matches.map(m => {
+      const match = m.match(/```(?:javascript|js|python)?\n([\s\S]*?)```/);
+      return match ? match[1].trim() : '';
+    }).filter(Boolean);
+  };
+
+  const handleApplyCode = (code: string) => {
+    onApplyCode(code);
+    setEditingMessageIdx(null);
+    setEditedCode('');
+  };
+
+  const handleStartEdit = (code: string, idx: number) => {
+    setEditedCode(code);
+    setEditingMessageIdx(idx);
+  };
+
+  const codeBlocks = aiMessages.flatMap((msg, i) =>
+    msg.role === 'assistant' && msg.content.includes('```')
+      ? extractCodeBlocks(msg.content).map((code, j) => ({ code, idx: i * 100 + j, msgIdx: i }))
+      : []
+  );
+
+  const getUniqueCodeBlocks = () => {
+    const seen = new Set<string>();
+    return codeBlocks.filter(({ code }) => {
+      if (seen.has(code)) return false;
+      seen.add(code);
+      return true;
+    });
+  };
+
+  return (
+    <>
+      <div
+        ref={resizerRef}
+        onMouseDown={() => setIsResizing(true)}
+        className={clsx(
+          "fixed right-0 top-16 bottom-0 w-1 cursor-col-resize z-50 transition-colors",
+          isResizing ? "bg-indigo-400" : "bg-transparent hover:bg-indigo-300"
+        )}
+        style={{ right: isOpen ? panelWidth - 4 : 0 }}
+      />
+
+      <div
+        ref={panelRef}
+        className={clsx(
+          "fixed right-0 top-16 bottom-0 bg-white border-l border-zinc-200 shadow-2xl z-40 flex flex-col transform transition-transform duration-300 ease-in-out",
+          isOpen ? "translate-x-0" : "translate-x-full"
+        )}
+        style={{ width: panelWidth }}
+      >
+        <div className="flex items-center justify-between p-4 border-b border-zinc-100 shrink-0 bg-indigo-50/50">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center shadow-sm">
+              <Bot className="w-5 h-5 text-indigo-600" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-zinc-900 leading-tight">FlowGate AI 助手</h3>
+              <p className="text-[10px] text-zinc-500 mt-0.5 font-medium flex items-center gap-1.5">
+                <GripVertical className="w-3 h-3" />
+                可拖动调整宽度
+              </p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1.5 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 rounded-lg transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-zinc-50/50">
+          {aiMessages.length === 0 ? (
+            <div className="text-center py-8">
+              <div className="w-14 h-14 bg-white border border-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-sm">
+                <Sparkles className="w-7 h-7 text-indigo-500" />
+              </div>
+              <h4 className="text-sm font-bold text-zinc-900 mb-2">我是您的工作流助手</h4>
+              <p className="text-xs text-zinc-500 max-w-[200px] mx-auto leading-relaxed">我可以帮您编写处理脚本、配置HTTP请求或解释现有节点结构。</p>
+
+              <div className="mt-8 flex flex-col gap-2.5 px-2">
+                <button onClick={() => onSendMessage()} className="text-xs text-left p-3 rounded-xl border border-zinc-200 bg-white hover:border-indigo-300 hover:bg-indigo-50 hover:shadow-sm text-zinc-600 transition-all font-medium">
+                  "帮我写一个简单的 JS 处理脚本"
+                </button>
+                <button onClick={() => onSendMessage()} className="text-xs text-left p-3 rounded-xl border border-zinc-200 bg-white hover:border-indigo-300 hover:bg-indigo-50 hover:shadow-sm text-zinc-600 transition-all font-medium">
+                  "帮我配置一个 HTTP 节点"
+                </button>
+                <button onClick={() => onSendMessage()} className="text-xs text-left p-3 rounded-xl border border-zinc-200 bg-white hover:border-indigo-300 hover:bg-indigo-50 hover:shadow-sm text-zinc-600 transition-all font-medium">
+                  "解释一下我现在选中的节点"
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              {aiMessages.map((msg, i) => (
+                <div key={i} className={clsx("flex gap-3", msg.role === 'user' ? "flex-row-reverse" : "")}>
+                  <div className={clsx(
+                    "w-8 h-8 rounded-full flex items-center justify-center shrink-0 shadow-sm",
+                    msg.role === 'user' ? "bg-indigo-100 border border-indigo-200" : "bg-emerald-100 border border-emerald-200"
+                  )}>
+                    {msg.role === 'user' ? <div className="text-sm">👤</div> : <Bot className="w-4 h-4 text-emerald-600" />}
+                  </div>
+                  <div className={clsx(
+                    "max-w-[85%] rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap overflow-hidden shadow-sm",
+                    msg.role === 'user'
+                      ? "bg-indigo-600 text-white rounded-tr-sm font-medium"
+                      : "bg-white border border-zinc-200 text-zinc-700 rounded-tl-sm"
+                  )}>
+                    {msg.role === 'user' ? (
+                      msg.content
+                    ) : (
+                      <div className="prose prose-sm prose-zinc max-w-none prose-pre:bg-zinc-800 prose-pre:text-zinc-100 prose-pre:p-3 prose-pre:rounded-xl prose-pre:shadow-inner prose-p:leading-relaxed prose-a:text-indigo-600 hover:prose-a:text-indigo-700">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {msg.content}
+                        </ReactMarkdown>
+                      </div>
+                    )}
+
+                    {msg.role === 'assistant' && msg.content.includes('```') && selectedNode?.type === 'script' && (
+                      <div className="mt-3 pt-3 border-t border-zinc-100/50">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Code className="w-3.5 h-3.5 text-indigo-500" />
+                          <span className="text-xs font-medium text-indigo-600">检测到代码块</span>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {getUniqueCodeBlocks().filter(({ msgIdx }) => msgIdx === i).map(({ code, idx }) => (
+                            <div key={idx} className="flex items-center gap-1.5">
+                              {editingMessageIdx === idx ? (
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => handleApplyCode(editedCode)}
+                                    className="px-2 py-1 text-xs font-medium bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-lg transition-colors border border-emerald-200"
+                                  >
+                                    保存
+                                  </button>
+                                  <button
+                                    onClick={() => setEditingMessageIdx(null)}
+                                    className="px-2 py-1 text-xs font-medium bg-zinc-100 text-zinc-600 hover:bg-zinc-200 rounded-lg transition-colors"
+                                  >
+                                    取消
+                                  </button>
+                                </div>
+                              ) : (
+                                <>
+                                  <button
+                                    onClick={() => handleApplyCode(code)}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg transition-colors border border-indigo-100 hover:border-indigo-200 shadow-sm"
+                                  >
+                                    <Code className="w-3.5 h-3.5" />
+                                    应用
+                                  </button>
+                                  <button
+                                    onClick={() => handleStartEdit(code, idx)}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-amber-50 text-amber-700 hover:bg-amber-100 rounded-lg transition-colors border border-amber-100 hover:border-amber-200 shadow-sm"
+                                  >
+                                    <FileText className="w-3.5 h-3.5" />
+                                    编辑
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+
+              {editingMessageIdx !== null && (
+                <div className="fixed inset-0 bg-zinc-900/50 backdrop-blur-sm flex items-center justify-center z-[100] p-4" onClick={() => setEditingMessageIdx(null)}>
+                  <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden border border-zinc-200" onClick={e => e.stopPropagation()}>
+                    <div className="px-4 py-3 bg-indigo-50 border-b border-indigo-100 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-indigo-600" />
+                        <h3 className="font-semibold text-zinc-900 text-sm">编辑代码</h3>
+                      </div>
+                      <button onClick={() => setEditingMessageIdx(null)} className="p-1 text-zinc-400 hover:text-zinc-600 rounded-lg hover:bg-indigo-100 transition-colors">
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div className="p-4">
+                      <textarea
+                        value={editedCode}
+                        onChange={e => setEditedCode(e.target.value)}
+                        rows={12}
+                        className="w-full px-4 py-3 text-sm font-mono bg-zinc-900 text-zinc-100 border border-zinc-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/50 resize-none"
+                        autoFocus
+                      />
+                    </div>
+                    <div className="px-4 py-3 bg-zinc-50 border-t border-zinc-100 flex justify-end gap-2">
+                      <button
+                        onClick={() => setEditingMessageIdx(null)}
+                        className="px-4 py-2 text-sm font-medium bg-white border border-zinc-200 text-zinc-600 hover:bg-zinc-50 rounded-lg transition-colors"
+                      >
+                        取消
+                      </button>
+                      <button
+                        onClick={() => handleApplyCode(editedCode)}
+                        className="px-4 py-2 text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 rounded-lg transition-colors"
+                      >
+                        应用到选中节点
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+          {aiLoading && (
+            <div className="flex gap-3 text-zinc-400 items-center pl-1">
+              <div className="w-8 h-8 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center shrink-0 shadow-sm">
+                <Bot className="w-4 h-4 text-emerald-500" />
+              </div>
+              <div className="flex gap-1.5 bg-white px-4 py-3 rounded-2xl rounded-tl-sm border border-zinc-200 shadow-sm">
+                <span className="w-1.5 h-1.5 bg-zinc-300 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+                <span className="w-1.5 h-1.5 bg-zinc-300 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+                <span className="w-1.5 h-1.5 bg-zinc-300 rounded-full animate-bounce"></span>
+              </div>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        <div className="p-4 border-t border-zinc-200 bg-white shrink-0 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+          <form onSubmit={onSendMessage} className="relative">
+            {selectedNode && (
+              <div className="absolute -top-8 left-1 right-1 flex items-center gap-1.5 px-2.5 py-1 text-[10px] text-zinc-600 font-medium bg-zinc-100/80 backdrop-blur-sm rounded-t-lg border border-zinc-200 border-b-0">
+                <FileText className="w-3 h-3 text-indigo-500" />
+                已携带节点: <span className="text-indigo-600 max-w-[120px] truncate">{selectedNode.data.label as string}</span> 的上下文
+              </div>
+            )}
+            <textarea
+              value={aiInput}
+              onChange={e => setAiInput(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  onSendMessage();
+                }
+              }}
+              placeholder="描述您的需求，按 Enter 发送..."
+              rows={2}
+              className="w-full pl-4 pr-12 py-3 text-sm bg-white border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 resize-none shadow-sm"
+            />
+            <button
+              type="submit"
+              disabled={!aiInput.trim() || aiLoading}
+              className="absolute right-2 bottom-2 pt-[0.1rem] pl-[0.15rem] p-1.5 w-8 h-8 flex items-center justify-center text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-zinc-300 disabled:shadow-none rounded-lg transition-all shadow-sm"
+            >
+              <Send className="w-4 h-4 scale-[0.9]" />
+            </button>
+          </form>
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -948,140 +1267,18 @@ export default function WorkflowEditor() {
       )}
 
       {/* AI Assistant Chat Panel */}
-      <div className={clsx(
-        "fixed right-0 top-16 bottom-0 w-80 md:w-[400px] bg-white border-l border-zinc-200 shadow-2xl z-40 transform transition-transform duration-300 ease-in-out flex flex-col",
-        isAiOpen ? "translate-x-0" : "translate-x-full"
-      )}>
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-zinc-100 shrink-0 bg-indigo-50/50">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center shadow-sm">
-              <Bot className="w-5 h-5 text-indigo-600" />
-            </div>
-            <div>
-              <h3 className="font-semibold text-zinc-900 leading-tight">FlowGate AI 助手</h3>
-              <p className="text-[10px] text-zinc-500 mt-0.5 font-medium">上下文感知 • 代码生成</p>
-            </div>
-          </div>
-          <button onClick={() => setIsAiOpen(false)} className="p-1.5 text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 rounded-lg transition-colors">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        {/* Message List */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-zinc-50/50">
-          {aiMessages.length === 0 ? (
-            <div className="text-center py-8">
-              <div className="w-14 h-14 bg-white border border-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-sm">
-                <Sparkles className="w-7 h-7 text-indigo-500" />
-              </div>
-              <h4 className="text-sm font-bold text-zinc-900 mb-2">我是您的工作流助手</h4>
-              <p className="text-xs text-zinc-500 max-w-[200px] mx-auto leading-relaxed">我可以帮您编写处理脚本、配置HTTP请求或解释现有节点结构。</p>
-              
-              <div className="mt-8 flex flex-col gap-2.5 px-2">
-                <button onClick={() => handleAiQuickAction('帮我写一个JS脚本，从 input 中提取 username 并返回')} className="text-xs text-left p-3 rounded-xl border border-zinc-200 bg-white hover:border-indigo-300 hover:bg-indigo-50 hover:shadow-sm text-zinc-600 transition-all font-medium">
-                  "帮我写一个简单的 JS 处理脚本"
-                </button>
-                <button onClick={() => handleAiQuickAction('帮我配置一个发起 POST 请求的 HTTP 节点参数')} className="text-xs text-left p-3 rounded-xl border border-zinc-200 bg-white hover:border-indigo-300 hover:bg-indigo-50 hover:shadow-sm text-zinc-600 transition-all font-medium">
-                  "帮我配置一个 HTTP 节点"
-                </button>
-                <button onClick={() => handleAiQuickAction('解释一下我现在选中的这个节点的作用')} className="text-xs text-left p-3 rounded-xl border border-zinc-200 bg-white hover:border-indigo-300 hover:bg-indigo-50 hover:shadow-sm text-zinc-600 transition-all font-medium">
-                  "解释一下我现在选中的节点"
-                </button>
-              </div>
-            </div>
-          ) : (
-            aiMessages.map((msg, i) => (
-              <div key={i} className={clsx("flex gap-3", msg.role === 'user' ? "flex-row-reverse" : "")}>
-                <div className={clsx(
-                  "w-8 h-8 rounded-full flex items-center justify-center shrink-0 shadow-sm",
-                  msg.role === 'user' ? "bg-indigo-100 border border-indigo-200" : "bg-emerald-100 border border-emerald-200"
-                )}>
-                  {msg.role === 'user' ? <div className="text-sm">👤</div> : <Bot className="w-4 h-4 text-emerald-600" />}
-                </div>
-                <div className={clsx(
-                  "max-w-[75%] rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap overflow-hidden shadow-sm",
-                  msg.role === 'user' 
-                    ? "bg-indigo-600 text-white rounded-tr-sm font-medium" 
-                    : "bg-white border border-zinc-200 text-zinc-700 rounded-tl-sm"
-                )}>
-                  {msg.role === 'user' ? (
-                    msg.content
-                  ) : (
-                    <div className="prose prose-sm prose-zinc max-w-none prose-pre:bg-zinc-800 prose-pre:text-zinc-100 prose-pre:p-3 prose-pre:rounded-xl prose-pre:shadow-inner prose-p:leading-relaxed prose-a:text-indigo-600 hover:prose-a:text-indigo-700">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {msg.content}
-                      </ReactMarkdown>
-                    </div>
-                  )}
-                  {msg.role === 'assistant' && msg.content.includes('```') && selectedNode?.type === 'script' && (
-                    <div className="mt-3 pt-3 border-t border-zinc-100/50 flex justify-end">
-                      <button
-                        onClick={() => {
-                          // Extract first code block
-                          const match = msg.content.match(/```(?:javascript|js|python)?\n([\s\S]*?)```/);
-                          if (match && match[1]) {
-                            insertCodeToNode(match[1].trim());
-                          }
-                        }}
-                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-lg transition-colors border border-indigo-100 hover:border-indigo-200 shadow-sm"
-                      >
-                        <Code className="w-3.5 h-3.5" />
-                        应用到选中节点
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))
-          )}
-          {aiLoading && (
-            <div className="flex gap-3 text-zinc-400 items-center pl-1">
-              <div className="w-8 h-8 rounded-full bg-emerald-50 border border-emerald-100 flex items-center justify-center shrink-0 shadow-sm">
-                <Bot className="w-4 h-4 text-emerald-500" />
-              </div>
-              <div className="flex gap-1.5 bg-white px-4 py-3 rounded-2xl rounded-tl-sm border border-zinc-200 shadow-sm">
-                <span className="w-1.5 h-1.5 bg-zinc-300 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
-                <span className="w-1.5 h-1.5 bg-zinc-300 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
-                <span className="w-1.5 h-1.5 bg-zinc-300 rounded-full animate-bounce"></span>
-              </div>
-            </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* Input Area */}
-        <div className="p-4 border-t border-zinc-200 bg-white shrink-0 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
-          <form onSubmit={handleSendAiMessage} className="relative">
-            {selectedNode && (
-              <div className="absolute -top-8 left-1 right-1 flex items-center gap-1.5 px-2.5 py-1 text-[10px] text-zinc-600 font-medium bg-zinc-100/80 backdrop-blur-sm rounded-t-lg border border-zinc-200 border-b-0">
-                <FileText className="w-3 h-3 text-indigo-500" />
-                已携带节点: <span className="text-indigo-600 max-w-[120px] truncate">{selectedNode.data.label as string}</span> 的上下文
-              </div>
-            )}
-            <textarea
-              value={aiInput}
-              onChange={e => setAiInput(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSendAiMessage();
-                }
-              }}
-              placeholder="描述您的需求，按 Enter 发送..."
-              rows={2}
-              className="w-full pl-4 pr-12 py-3 text-sm bg-white border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 resize-none shadow-sm"
-            />
-            <button
-              type="submit"
-              disabled={!aiInput.trim() || aiLoading}
-              className="absolute right-2 bottom-2 pt-[0.1rem] pl-[0.15rem] p-1.5 w-8 h-8 flex items-center justify-center text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-zinc-300 disabled:shadow-none rounded-lg transition-all shadow-sm"
-            >
-              <Send className="w-4 h-4 scale-[0.9]" />
-            </button>
-          </form>
-        </div>
-      </div>
+      <AiChatPanel
+        isOpen={isAiOpen}
+        onClose={() => setIsAiOpen(false)}
+        aiMessages={aiMessages}
+        aiInput={aiInput}
+        setAiInput={setAiInput}
+        aiLoading={aiLoading}
+        onSendMessage={handleSendAiMessage}
+        selectedNode={selectedNode}
+        onApplyCode={insertCodeToNode}
+        messagesEndRef={messagesEndRef}
+      />
 
       {/* Floating Toggle Button */}
       {!isAiOpen && (

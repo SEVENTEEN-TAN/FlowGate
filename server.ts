@@ -857,7 +857,14 @@ app.post('/api/admin/ai/chat', adminAuth, async (req, res) => {
   }
 
   try {
-    const endpoint = apiUrl.replace(/\/+$/, '') + '/v1/chat/completions';
+    let endpoint = apiUrl.replace(/\/+$/, '');
+    if (!endpoint.endsWith('/chat/completions')) {
+      if (endpoint.match(/\/v\d+$/)) {
+        endpoint += '/chat/completions';
+      } else {
+        endpoint += '/v1/chat/completions';
+      }
+    }
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
@@ -893,7 +900,14 @@ app.post('/api/admin/ai/test', adminAuth, async (req, res) => {
   }
 
   try {
-    const endpoint = api_url.replace(/\/+$/, '') + '/v1/chat/completions';
+    let endpoint = api_url.replace(/\/+$/, '');
+    if (!endpoint.endsWith('/chat/completions')) {
+      if (endpoint.match(/\/v\d+$/)) {
+        endpoint += '/chat/completions';
+      } else {
+        endpoint += '/v1/chat/completions';
+      }
+    }
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: {

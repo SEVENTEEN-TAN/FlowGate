@@ -1061,6 +1061,8 @@ function AdminSettings() {
   const [aiTestMsg, setAiTestMsg] = useState('');
   const [testingAi, setTestingAi] = useState(false);
 
+  const DEFAULT_AI_PROMPT = '你是 FlowGate 工作流平台的 AI 助手。你帮助用户在可视化流程编辑器中构建自动化工作流。\n\n## 系统架构\nFlowGate 是一个基于卡密验证的自动化流程执行平台。用户通过卡密登录后，执行绑定的工作流。\n\n## 可用节点类型\n1. **触发器** — 流程入口，接收用户前端表单输入，输出为 input 对象\n2. **JS 脚本** — 在 Node.js 沙箱中执行 JavaScript\n   - 可用变量: input（用户输入）, prev（上一节点输出）, context.nodeId（指定节点输出）\n   - 使用 console.log() 输出日志\n   - return 的值成为此节点的输出\n3. **Python 脚本** — 执行 Python 脚本\n   - 环境变量: USER_INPUT, PREV_OUTPUT, INPUT_DATA（JSON 格式）\n   - 最后一行 print 的 JSON 成为节点输出\n4. **HTTP 请求** — 发送 HTTP 请求（GET/POST/PUT/DELETE）\n   - 输出: { status: 200, data: {...} }\n5. **条件分支** — If/Else 判断，True 走左侧，False 走右侧\n6. **延时等待** — 暂停执行指定秒数\n7. **日志输出** — 输出消息到用户日志面板\n8. **卡密库** — 从卡密库获取一条未使用的卡密\n   - 输出: { key, key_id, pool_id, pool_name }\n9. **成功结束 / 失败结束** — 标记流程执行结果\n\n## 模板变量语法\n在 HTTP、日志、脚本节点中可使用:\n- {{input.字段名}} — 用户表单输入\n- {{prev.字段名}} — 上一节点输出\n- {{nodeId.output.字段名}} — 指定节点的输出\n\n## 你的职责\n- 帮助用户生成 JS/Python 脚本代码\n- 帮助配置 HTTP 请求（URL、Headers、Body）\n- 解释和优化已有代码\n- 建议工作流设计方案\n- 用中文回答，代码注释也用中文';
+
   useEffect(() => {
     fetch('/api/admin/settings', {
       headers: { Authorization: `Bearer ${localStorage.getItem('adminToken')}` }
@@ -1070,7 +1072,12 @@ function AdminSettings() {
         setAiUrl(data.ai_api_url || 'https://api.openai.com');
         setAiKey(data.ai_api_key || '');
         setAiModel(data.ai_model_id || 'gpt-4o-mini');
-        setAiPrompt(data.ai_system_prompt || '你是 FlowGate 工作流平台的 AI 助手。你帮助用户在可视化流程编辑器中构建自动化工作流。\n\n## 系统架构\nFlowGate 是一个基于卡密验证的自动化流程执行平台。用户通过卡密登录后，执行绑定的工作流。\n\n## 可用节点类型\n1. **触发器** — 流程入口，接收用户前端表单输入，输出为 input 对象\n2. **JS 脚本** — 在 Node.js 沙箱中执行 JavaScript\n   - 可用变量: input（用户输入）, prev（上一节点输出）, context.nodeId（指定节点输出）\n   - 使用 console.log() 输出日志\n   - return 的值成为此节点的输出\n3. **Python 脚本** — 执行 Python 脚本\n   - 环境变量: USER_INPUT, PREV_OUTPUT, INPUT_DATA（JSON 格式）\n   - 最后一行 print 的 JSON 成为节点输出\n4. **HTTP 请求** — 发送 HTTP 请求（GET/POST/PUT/DELETE）\n   - 输出: { status: 200, data: {...} }\n5. **条件分支** — If/Else 判断，True 走左侧，False 走右侧\n6. **延时等待** — 暂停执行指定秒数\n7. **日志输出** — 输出消息到用户日志面板\n8. **卡密库** — 从卡密库获取一条未使用的卡密\n   - 输出: { key, key_id, pool_id, pool_name }\n9. **成功结束 / 失败结束** — 标记流程执行结果\n\n## 模板变量语法\n在 HTTP、日志、脚本节点中可使用:\n- {{input.字段名}} — 用户表单输入\n- {{prev.字段名}} — 上一节点输出\n- {{nodeId.output.字段名}} — 指定节点的输出\n\n## 你的职责\n- 帮助用户生成 JS/Python 脚本代码\n- 帮助配置 HTTP 请求（URL、Headers、Body）\n- 解释和优化已有代码\n- 建议工作流设计方案\n- 用中文回答，代码注释也用中文');
+        
+        if (!data.ai_system_prompt || !data.ai_system_prompt.trim()) {
+          setAiPrompt(DEFAULT_AI_PROMPT);
+        } else {
+          setAiPrompt(data.ai_system_prompt);
+        }
         setLoadingAi(false);
       })
       .catch(err => {
@@ -1177,8 +1184,9 @@ function AdminSettings() {
   };
 
   return (
-    <div className="p-4 md:p-8 max-w-3xl mx-auto w-full overflow-y-auto h-full space-y-6">
-      <h2 className="text-2xl font-bold text-zinc-900 mb-8">系统设置</h2>
+    <div className="w-full h-full overflow-y-auto overflow-x-hidden relative bg-zinc-50">
+      <div className="p-4 md:p-8 max-w-3xl mx-auto w-full space-y-6">
+        <h2 className="text-2xl font-bold text-zinc-900 mb-8">系统设置</h2>
       
       {/* AI Settings Section */}
       <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-zinc-200">
@@ -1230,7 +1238,16 @@ function AdminSettings() {
             </div>
             
             <div>
-              <label className="block text-sm font-medium text-zinc-700 mb-1">AI 系统提示词 (System Prompt)</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-sm font-medium text-zinc-700">AI 系统提示词 (System Prompt)</label>
+                <button 
+                  type="button" 
+                  onClick={() => setAiPrompt(DEFAULT_AI_PROMPT)}
+                  className="text-xs text-indigo-600 hover:text-indigo-700 font-medium transition-colors"
+                >
+                  恢复默认提示词
+                </button>
+              </div>
               <textarea
                 value={aiPrompt}
                 onChange={e => setAiPrompt(e.target.value)}
@@ -1300,6 +1317,7 @@ function AdminSettings() {
             更新密码
           </button>
         </form>
+      </div>
       </div>
     </div>
   );
