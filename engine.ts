@@ -643,6 +643,7 @@ export async function executeWorkflow(
           let iteration = 0;
           let condResult = true;
           let lastChildOutput: any = {};
+          let lastIterationFailed = false;
           
           while (condResult && iteration < maxIter) {
             iteration++;
@@ -656,6 +657,7 @@ export async function executeWorkflow(
             // Execute children in topological order
             const childSorted = topologicalSort(childNodes, childEdges);
             let childFailed = false;
+            let childError = '';
             
             for (const cid of childSorted) {
               const cnode = nodeMap.get(cid);
@@ -699,32 +701,44 @@ export async function executeWorkflow(
                 context[cid].error = err.message;
                 log(`  [错误] 子节点执行失败: ${err.message}`);
                 childFailed = true;
+                childError = err.message;
                 break;
               }
             }
             
             if (childFailed) {
-              log(`[循环] 子节点执行失败，退出循环`);
-              condResult = false;
-              break;
+              lastIterationFailed = true;
+              // If there are more iterations left, retry
+              if (iteration < maxIter) {
+                log(`[循环] ⚠️ 第 ${iteration} 轮失败 (${childError})，将重试...`);
+                continue;  // retry next iteration
+              } else {
+                log(`[循环] ❌ 第 ${iteration} 轮失败，已达最大次数，退出循环`);
+                break;
+              }
             }
+            
+            // Child succeeded this round, reset failure flag
+            lastIterationFailed = false;
             
             // Evaluate condition using last child output as prev
             const condExtras = { input: findTriggerOutput(context, nodes), prev: lastChildOutput };
             condResult = evaluateCondition(node, context, log, condExtras);
           }
           
-          // Determine exit
-          if (iteration >= maxIter && condResult) {
-            log(`[循环] ⚠️ 达到最大循环次数 ${maxIter}，强制退出`);
-            output = { result: false, iteration, maxIterations: maxIter, exitReason: 'max_iterations', lastOutput: lastChildOutput };
-            // Follow maxed, skip exit
+          // Determine exit path
+          if (lastIterationFailed || (iteration >= maxIter && condResult)) {
+            // All retries exhausted (due to failures or max iterations with condition still true)
+            const reason = lastIterationFailed ? 'child_failed' : 'max_iterations';
+            log(`[循环] ⚠️ ${lastIterationFailed ? '所有重试均失败' : `达到最大循环次数 ${maxIter}`}，从失败出口退出`);
+            output = { result: false, iteration, maxIterations: maxIter, exitReason: reason, lastOutput: lastChildOutput };
+            // Follow maxed (failure), skip exit (success)
             const exitEdges = edges.filter(e => e.source === nodeId && e.sourceHandle === 'exit');
             for (const e of exitEdges) skipNodes.add(e.target);
           } else {
             log(`[循环] ✅ 条件为 False，共循环 ${iteration} 次，正常退出`);
             output = { result: false, iteration, maxIterations: maxIter, exitReason: 'condition_false', lastOutput: lastChildOutput };
-            // Follow exit, skip maxed
+            // Follow exit (success), skip maxed (failure)
             const maxedEdges = edges.filter(e => e.source === nodeId && e.sourceHandle === 'maxed');
             for (const e of maxedEdges) skipNodes.add(e.target);
           }

@@ -22,7 +22,7 @@ import {
   MarkerType,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { ArrowLeft, Save, Play, Code, Globe, GitBranch, Clock, MessageSquare, Zap, X, Trash2, HelpCircle, Database, CheckCircle2, XCircle, AlertTriangle, Bot, Send, Sparkles, Copy, Loader2, ChevronDown, FileText, GripVertical, LayoutGrid, Repeat2, Download, Upload } from 'lucide-react';
+import { ArrowLeft, Save, Play, Code, Globe, GitBranch, Clock, MessageSquare, Zap, X, Trash2, HelpCircle, Database, CheckCircle2, XCircle, AlertTriangle, Bot, Send, Sparkles, Copy, Loader2, ChevronDown, FileText, GripVertical, LayoutGrid, Repeat2, Download, Upload, Undo2, Redo2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -993,6 +993,81 @@ function WorkflowEditorInner() {
   const reactFlow = useReactFlow();
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
 
+  // ==================== Undo / Redo ====================
+  type HistorySnapshot = { nodes: Node[]; edges: Edge[] };
+  const historyRef = useRef<HistorySnapshot[]>([]);
+  const historyIndexRef = useRef(-1);
+  const isUndoRedoRef = useRef(false);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+
+  const updateUndoRedoState = useCallback(() => {
+    setCanUndo(historyIndexRef.current > 0);
+    setCanRedo(historyIndexRef.current < historyRef.current.length - 1);
+  }, []);
+
+  const pushHistory = useCallback((n: Node[], e: Edge[]) => {
+    if (isUndoRedoRef.current) return;
+    const snapshot: HistorySnapshot = {
+      nodes: JSON.parse(JSON.stringify(n)),
+      edges: JSON.parse(JSON.stringify(e)),
+    };
+    // Truncate any redo history
+    historyRef.current = historyRef.current.slice(0, historyIndexRef.current + 1);
+    historyRef.current.push(snapshot);
+    // Cap at 50
+    if (historyRef.current.length > 50) {
+      historyRef.current.shift();
+    } else {
+      historyIndexRef.current++;
+    }
+    updateUndoRedoState();
+  }, [updateUndoRedoState]);
+
+  const undo = useCallback(() => {
+    if (historyIndexRef.current <= 0) return;
+    historyIndexRef.current--;
+    const snap = historyRef.current[historyIndexRef.current];
+    isUndoRedoRef.current = true;
+    setNodes(JSON.parse(JSON.stringify(snap.nodes)));
+    setEdges(JSON.parse(JSON.stringify(snap.edges)));
+    setSelectedNode(null);
+    isUndoRedoRef.current = false;
+    updateUndoRedoState();
+  }, [setNodes, setEdges, updateUndoRedoState]);
+
+  const redo = useCallback(() => {
+    if (historyIndexRef.current >= historyRef.current.length - 1) return;
+    historyIndexRef.current++;
+    const snap = historyRef.current[historyIndexRef.current];
+    isUndoRedoRef.current = true;
+    setNodes(JSON.parse(JSON.stringify(snap.nodes)));
+    setEdges(JSON.parse(JSON.stringify(snap.edges)));
+    setSelectedNode(null);
+    isUndoRedoRef.current = false;
+    updateUndoRedoState();
+  }, [setNodes, setEdges, updateUndoRedoState]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const active = document.activeElement;
+      const isInput = active?.tagName === 'INPUT' || active?.tagName === 'TEXTAREA' || active?.tagName === 'SELECT' || (active as HTMLElement)?.isContentEditable;
+      if (isInput) return;
+
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+        e.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [undo, redo]);
+
   // Properties panel resizable state
   const [propsPanelWidth, setPropsPanelWidth] = useState(() => {
     const saved = localStorage.getItem('propsPanelWidth');
@@ -1116,6 +1191,8 @@ function WorkflowEditorInner() {
             }));
             setNodes(parsedNodes);
             setEdges(parsedEdges);
+            // Push initial snapshot for undo baseline
+            pushHistory(parsedNodes, parsedEdges);
             // Set counter to avoid id conflicts
             nodeIdCounter = parsedNodes.reduce((max: number, n: Node) => {
               const num = parseInt(n.id.replace('node_', ''));
@@ -1127,22 +1204,32 @@ function WorkflowEditorInner() {
       // New workflow - add default trigger
       setWorkflowName('新工作流');
       const triggerId = getNextNodeId();
-      setNodes([{
+      const initialNodes = [{
         id: triggerId,
         type: 'trigger',
         position: { x: 300, y: 50 },
         data: { label: '开始' },
-      }]);
+      }] as Node[];
+      setNodes(initialNodes);
+      pushHistory(initialNodes, []);
     }
   }, [appId, workflowId]);
 
   const onConnect = useCallback((params: Connection) => {
-    setEdges(eds => addEdge({
-      ...params,
-      markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
-      animated: true,
-    } as any, eds));
-  }, [setEdges]);
+    setEdges(eds => {
+      const newEdges = addEdge({
+        ...params,
+        markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
+        animated: true,
+      } as any, eds);
+      // Push history after state update via setTimeout
+      setTimeout(() => {
+        const rf = reactFlow;
+        pushHistory(rf.getNodes(), newEdges);
+      }, 0);
+      return newEdges;
+    });
+  }, [setEdges, reactFlow, pushHistory]);
 
   const onNodeClick = useCallback((_: any, node: Node) => {
     setSelectedNode(node);
@@ -1157,15 +1244,21 @@ function WorkflowEditorInner() {
   }, []);
 
   const onNodeDataChange = useCallback((id: string, newData: any) => {
-    setNodes(nds => nds.map(n => n.id === id ? { ...n, data: newData } : n));
+    setNodes(nds => {
+      const updated = nds.map(n => n.id === id ? { ...n, data: newData } : n);
+      setTimeout(() => pushHistory(updated, reactFlow.getEdges()), 0);
+      return updated;
+    });
     setSelectedNode(prev => prev && prev.id === id ? { ...prev, data: newData } : prev);
-  }, [setNodes]);
+  }, [setNodes, reactFlow, pushHistory]);
 
   const onNodeDelete = useCallback((id: string) => {
+    // Save snapshot before delete
+    pushHistory(reactFlow.getNodes(), reactFlow.getEdges());
     setNodes(nds => nds.filter(n => n.id !== id));
     setEdges(eds => eds.filter(e => e.source !== id && e.target !== id));
     setSelectedNode(null);
-  }, [setNodes, setEdges]);
+  }, [setNodes, setEdges, reactFlow, pushHistory]);
 
   // Add node from palette — place at viewport center
   const addNode = useCallback((paletteItem: typeof NODE_PALETTE[0]) => {
@@ -1183,8 +1276,12 @@ function WorkflowEditorInner() {
       data: { label: paletteItem.label, ...paletteItem.defaults },
       ...(paletteItem.type === 'loop' ? { style: { width: 400, height: 250 }, zIndex: -1 } : {}),
     };
-    setNodes(nds => [...nds, newNode]);
-  }, [setNodes, reactFlow]);
+    setNodes(nds => {
+      const updated = [...nds, newNode];
+      setTimeout(() => pushHistory(updated, reactFlow.getEdges()), 0);
+      return updated;
+    });
+  }, [setNodes, reactFlow, pushHistory]);
 
   // Auto-parent nodes when dropped inside a loop group
   const onNodeDragStop = useCallback((_: any, draggedNode: Node) => {
@@ -1205,7 +1302,7 @@ function WorkflowEditorInner() {
           break;
         }
       }
-      return nds.map(n => {
+      const updated = nds.map(n => {
         if (n.id !== draggedNode.id) return n;
         if (foundParent && draggedNode.parentId !== foundParent.id) {
           return { ...n, parentId: foundParent.id, extent: 'parent' as const, position: { x: absX - foundParent.position.x, y: absY - foundParent.position.y } };
@@ -1215,8 +1312,15 @@ function WorkflowEditorInner() {
         }
         return n;
       });
+      // Only push history if parentId actually changed
+      const oldParentId = draggedNode.parentId;
+      const newParentId = foundParent?.id || undefined;
+      if (oldParentId !== newParentId) {
+        setTimeout(() => pushHistory(updated, reactFlow.getEdges()), 0);
+      }
+      return updated;
     });
-  }, [setNodes]);
+  }, [setNodes, reactFlow, pushHistory]);
 
   // Auto-layout using dagre
   const autoLayout = useCallback(() => {
@@ -1255,16 +1359,25 @@ function WorkflowEditorInner() {
       };
     });
 
+    pushHistory(nodes, edges);
     setNodes(layoutedNodes);
     // Fit view after layout with a small delay
     setTimeout(() => reactFlow.fitView({ padding: 0.2, duration: 300 }), 50);
-  }, [nodes, edges, setNodes, reactFlow]);
+  }, [nodes, edges, setNodes, reactFlow, pushHistory]);
 
   // Export workflow as JSON
   const handleExport = () => {
     const data = {
       name: workflowName,
-      nodes: nodes.map(n => ({ id: n.id, type: n.type, data: n.data, position: n.position })),
+      nodes: nodes.map(n => ({
+        id: n.id, type: n.type, data: n.data, position: n.position,
+        ...(n.parentId ? { parentId: n.parentId } : {}),
+        ...((n as any).extent ? { extent: (n as any).extent } : {}),
+        ...(n.style ? { style: n.style } : {}),
+        ...(n.width != null ? { width: n.width } : {}),
+        ...(n.height != null ? { height: n.height } : {}),
+        ...(n.zIndex != null ? { zIndex: n.zIndex } : {}),
+      })),
       edges: edges.map(e => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle })),
       exportedAt: new Date().toISOString(),
     };
@@ -1296,12 +1409,14 @@ function WorkflowEditorInner() {
             return;
           }
           if (!confirm(`确认导入工作流「${data.name || '未命名'}\u300d\uff1f\u5f53前编辑内容将被覆盖\u3002`)) return;
-          setNodes(data.nodes);
-          setEdges((data.edges as Edge[]).map((e: any) => ({
+          pushHistory(reactFlow.getNodes(), reactFlow.getEdges());
+          const importedEdges = (data.edges as Edge[]).map((e: any) => ({
             ...e,
             markerEnd: e.markerEnd || { type: MarkerType.ArrowClosed, width: 16, height: 16 },
             animated: e.animated ?? true,
-          })));
+          }));
+          setNodes(data.nodes);
+          setEdges(importedEdges);
           if (data.name) setWorkflowName(data.name);
           setTimeout(() => reactFlow.fitView({ padding: 0.2, duration: 300 }), 100);
         } catch {
@@ -1328,6 +1443,8 @@ function WorkflowEditorInner() {
         ...(n.parentId ? { parentId: n.parentId } : {}),
         ...((n as any).extent ? { extent: (n as any).extent } : {}),
         ...(n.style ? { style: n.style } : {}),
+        ...(n.width != null ? { width: n.width } : {}),
+        ...(n.height != null ? { height: n.height } : {}),
         ...(n.zIndex != null ? { zIndex: n.zIndex } : {}),
       }));
       const cleanEdges = edges.map(e => ({
@@ -1445,6 +1562,25 @@ function WorkflowEditorInner() {
         </div>
         <div className="flex items-center gap-3">
           {saveMsg && <span className="text-sm text-emerald-600 font-medium">{saveMsg}</span>}
+          <div className="flex items-center border border-zinc-200 rounded-lg overflow-hidden">
+            <button
+              onClick={undo}
+              disabled={!canUndo}
+              title="撤销 (Ctrl+Z)"
+              className="flex items-center gap-1.5 px-2.5 py-2 bg-white hover:bg-zinc-50 text-zinc-700 font-medium text-sm transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <Undo2 className="w-4 h-4" />
+            </button>
+            <div className="w-px h-5 bg-zinc-200" />
+            <button
+              onClick={redo}
+              disabled={!canRedo}
+              title="重做 (Ctrl+Y)"
+              className="flex items-center gap-1.5 px-2.5 py-2 bg-white hover:bg-zinc-50 text-zinc-700 font-medium text-sm transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <Redo2 className="w-4 h-4" />
+            </button>
+          </div>
           <button
             onClick={autoLayout}
             title="一键整理布局"
@@ -1510,8 +1646,21 @@ function WorkflowEditorInner() {
           <ReactFlow
             nodes={nodes}
             edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
+            onNodesChange={(changes) => {
+              // If any node is being removed by ReactFlow (Delete key), save history first
+              const hasRemove = changes.some((c: any) => c.type === 'remove');
+              if (hasRemove && !isUndoRedoRef.current) {
+                pushHistory(reactFlow.getNodes(), reactFlow.getEdges());
+              }
+              onNodesChange(changes);
+            }}
+            onEdgesChange={(changes) => {
+              const hasRemove = changes.some((c: any) => c.type === 'remove');
+              if (hasRemove && !isUndoRedoRef.current) {
+                pushHistory(reactFlow.getNodes(), reactFlow.getEdges());
+              }
+              onEdgesChange(changes);
+            }}
             onConnect={onConnect}
             onNodeClick={onNodeClick}
             onEdgeClick={onEdgeClick}
