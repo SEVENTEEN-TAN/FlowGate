@@ -5,7 +5,10 @@
       "Bash(netstat:*)",
       "Bash(taskkill /PID:*)",
       "Bash(cmd /c:*)",
-      "Bash(powershell -Command:*)"
+      "Bash(powershell -Command:*)",
+      "Bash(npm rebuild:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }
